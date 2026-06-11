@@ -12,11 +12,10 @@ secrets:
   - CLAUDE_CODE_OAUTH_TOKEN   # subscription auth for headless claude
   - TELEGRAM_TOKEN
   - TELEGRAM_CHAT_ID
-# Tightly scoped: Claude may ONLY call the aggregate feature/store/notify tools.
-# No raw DB access -> raw financial data never enters Claude's context (§15.3).
+# Scoped to finance_cli only (features/store-insight/notify). finance_cli has
+# NO raw-query subcommand, so raw financial data never enters Claude's context
+# (§15.3). One pattern avoids multi-line-arg permission-split denials.
 allowed_tools:
-  - "Bash(python3 lib/py/finance_cli.py features:*)"
-  - "Bash(python3 lib/py/finance_cli.py store-insight:*)"
-  - "Bash(python3 lib/py/finance_cli.py notify:*)"
+  - "Bash(python3 lib/py/finance_cli.py:*)"
 deploy:
   target: local-cron         # finance is local-only (§11.5)

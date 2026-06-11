@@ -45,7 +45,8 @@ def cmd_features(args) -> int:
 
 
 def cmd_store_insight(args) -> int:
-    payload = sys.stdin.read()
+    # Prefer --json (single-line, permission-friendly); fall back to stdin.
+    payload = args.json if args.json is not None else sys.stdin.read()
     try:
         data = json.loads(payload)
     except json.JSONDecodeError:
@@ -66,7 +67,10 @@ def cmd_store_insight(args) -> int:
 
 
 def cmd_notify(args) -> int:
-    text = args.text or sys.stdin.read()
+    text = args.text if args.text is not None else sys.stdin.read()
+    # Allow single-line invocation with literal \n escapes (real newlines in a
+    # CLI arg would be split into separate commands by the permission parser).
+    text = text.replace("\\n", "\n")
     notify_mod.send(text)
     print("sent")
     return 0
@@ -105,6 +109,7 @@ def main() -> int:
     ps.add_argument("--agent", default="finance-analyze")
     ps.add_argument("--model", default="")
     ps.add_argument("--input-hash", dest="input_hash", default="")
+    ps.add_argument("--json", default=None, help="Report JSON as a single-line string (else read stdin)")
     ps.set_defaults(func=cmd_store_insight)
 
     pn = sub.add_parser("notify")
