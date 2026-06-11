@@ -59,8 +59,10 @@ Deps: `pip install -r requirements.txt`. Secret scanner: `pre-commit install`.
 
 ## Finance subsystem (local-only, never cloud)
 
-- Data source: **SimpleFIN Bridge** (read-only, $15/yr). `SIMPLEFIN_ACCESS_URL`
-  is the one credential.
+- Data sources: **SimpleFIN Bridge** (banks/cards/investments, read-only, $15/yr;
+  `SIMPLEFIN_ACCESS_URL`) and **Splitwise** (shared-expense balances + your
+  expense share, free API key; `SPLITWISE_API_KEY`). Sync automations:
+  `finance-sync`, `splitwise-sync`.
 - `finance-sync` (ETL) → SQLite `data/finance.db` (gitignored, immutable raw +
   layered labels + time-series balances/holdings). `finance-weekly` reads the DB
   for a Telegram digest.

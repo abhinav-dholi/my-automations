@@ -36,8 +36,10 @@ def build_summary(conn) -> dict:
 
     balances = {row["name"]: round(row["balance"], 2)
                 for row in store.latest_balances(conn)}
+    splitwise_net = store.splitwise_net(conn)
 
     return {
+        "splitwise_net": splitwise_net,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "window_days": WINDOW_DAYS,
         "total_spend": round(total_spend, 2),
@@ -61,6 +63,11 @@ def format_digest(s: dict) -> str:
     lines += ["", "Balances:"]
     for name, bal in s["balances"].items():
         lines.append(f"  {name:<20} ${bal:.2f}")
+    if s.get("splitwise_net"):
+        net = s["splitwise_net"]
+        lines += ["", "Splitwise (+ owed to you):"]
+        for cur, amt in net.items():
+            lines.append(f"  {cur:<6} ${amt:.2f}")
     return "\n".join(lines)
 
 

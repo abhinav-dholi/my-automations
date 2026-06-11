@@ -92,6 +92,25 @@ CREATE TABLE IF NOT EXISTS insights (
     input_hash TEXT,
     output_json TEXT
 );
+CREATE TABLE IF NOT EXISTS splitwise_balances (
+    friend_id INTEGER,
+    friend_name TEXT,
+    currency TEXT,
+    amount REAL,            -- + == owed to me
+    as_of TEXT,
+    PRIMARY KEY (friend_id, currency, as_of)
+);
+CREATE TABLE IF NOT EXISTS splitwise_expenses (
+    id INTEGER PRIMARY KEY,
+    date TEXT,
+    description TEXT,
+    currency TEXT,
+    cost REAL,
+    my_owed_share REAL,
+    my_paid_share REAL,
+    group_id INTEGER,
+    ingested_at TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_txn_posted ON transactions (posted);
 CREATE INDEX IF NOT EXISTS idx_txn_account ON transactions (account_id);
 """
@@ -184,7 +203,44 @@ def record_sync(conn, *, source, started, status, n_accounts, n_transactions,
     )
 
 
+def record_splitwise_balance(conn, *, friend_id, friend_name, currency, amount, as_of) -> None:
+    conn.execute(
+        """INSERT OR REPLACE INTO splitwise_balances
+           (friend_id,friend_name,currency,amount,as_of) VALUES (?,?,?,?,?)""",
+        (friend_id, friend_name, currency, amount, as_of),
+    )
+
+
+def upsert_splitwise_expense(conn, *, id, date, description, currency, cost,
+                             my_owed_share, my_paid_share, group_id) -> None:
+    conn.execute(
+        """INSERT OR REPLACE INTO splitwise_expenses
+           (id,date,description,currency,cost,my_owed_share,my_paid_share,group_id,ingested_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (id, date, description, currency, cost, my_owed_share, my_paid_share,
+         group_id, _now()),
+    )
+
+
 # --- reads --------------------------------------------------------------
+
+def splitwise_net(conn) -> dict[str, float]:
+    """Latest net Splitwise balance per currency (+ == owed to me)."""
+    rows = conn.execute(
+        """SELECT currency, SUM(amount) AS net FROM splitwise_balances b
+           WHERE as_of = (SELECT MAX(as_of) FROM splitwise_balances)
+           GROUP BY currency""",
+    ).fetchall()
+    return {r["currency"]: round(r["net"], 2) for r in rows}
+
+
+def splitwise_share_since(conn, since_iso: str) -> float:
+    """Sum of my owed share of expenses dated on/after since_iso (my real cost)."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(my_owed_share),0) AS s FROM splitwise_expenses WHERE date >= ?",
+        (since_iso,),
+    ).fetchone()
+    return round(row["s"], 2)
 
 def transactions_since(conn, since_unix: int) -> list[sqlite3.Row]:
     return conn.execute(

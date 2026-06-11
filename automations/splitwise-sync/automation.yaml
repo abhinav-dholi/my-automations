@@ -1,0 +1,14 @@
+id: splitwise-sync
+description: Ingest Splitwise friend balances and your share of expenses into the local datastore.
+runtime: python
+entry: main.py
+triggers:
+  - cli
+  - schedule
+  - skill
+schedule: "30 6 * * *"       # daily 06:30 LOCAL (after finance-sync)
+tz: America/New_York
+secrets:
+  - SPLITWISE_API_KEY
+deploy:
+  target: local-cron         # local-only, like the rest of finance (§11.5)

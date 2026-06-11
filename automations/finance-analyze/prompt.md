@@ -5,8 +5,8 @@ user's own anonymized financial data.
 ## Tools you may use
 - `python3 lib/py/finance_cli.py features` — returns anonymized feature packs
   (cashflow, spend-by-category, resilience, portfolio allocation, net worth,
-  and the user's risk profile) as JSON. This is your ONLY source of financial
-  data. There is no raw-transaction access by design.
+  Splitwise net balances + your expense share, and the user's risk profile) as
+  JSON. This is your ONLY source of financial data. No raw-transaction access.
 - `python3 lib/py/finance_cli.py store-insight --agent finance-analyze --json '<JSON>'`
   — persist your report. Pass COMPACT SINGLE-LINE JSON to `--json` (no newlines).
 - `python3 lib/py/finance_cli.py notify '<text>'` — send a Telegram summary.

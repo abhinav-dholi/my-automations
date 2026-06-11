@@ -24,10 +24,13 @@ def _months_span(rows) -> float:
 
 def build(profile: dict | None = None, lookback_days: int = 90) -> dict:
     since = int(time.time()) - lookback_days * 86400
+    since_iso = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime(since))
     with store.connect() as conn:
         txns = store.transactions_since(conn, since)
         balances = store.latest_balances(conn)
         holdings = store.latest_holdings(conn)
+        sw_net = store.splitwise_net(conn)
+        sw_share = store.splitwise_share_since(conn, since_iso)
 
     months = _months_span(txns)
 
@@ -85,5 +88,11 @@ def build(profile: dict | None = None, lookback_days: int = 90) -> dict:
             "top_concentration_pct": round(top_concentration, 3),
         },
         "net_worth": net_worth,
+        "splitwise": {
+            # + == owed to you, - == you owe. Settle receivables before counting
+            # as spendable; surfaced separately, NOT folded into liquid cash.
+            "net_balance_by_currency": sw_net,
+            "your_expense_share_in_window": sw_share,
+        },
         "profile": profile or {},
     }
