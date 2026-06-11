@@ -12,8 +12,8 @@ import secrets_store
 import simplefin
 import store
 
-# Look back 90 days each sync; idempotent upserts dedupe overlap.
-LOOKBACK_DAYS = 90
+# SimpleFIN recommends <=45 days per request; idempotent upserts dedupe overlap.
+LOOKBACK_DAYS = 45
 
 
 def infer_type(name: str, has_holdings: bool) -> str:

@@ -77,6 +77,11 @@ def get_accounts(access_url: str, start: int, end: int,
     resp = requests.get(f"{access_url}/accounts", params=params, timeout=60)
     if resp.status_code == 403:
         raise TokenRevoked("SimpleFIN returned 403 — Access URL revoked/compromised.")
+    if resp.status_code == 402:
+        raise RuntimeError(
+            "SimpleFIN returned 402 Payment Required — your SimpleFIN Bridge "
+            "subscription isn't active. Pay/activate at the Bridge, then retry."
+        )
     if resp.status_code != 200:
         raise RuntimeError(
             scrub.clean(f"SimpleFIN fetch failed {resp.status_code}: {resp.text}")
