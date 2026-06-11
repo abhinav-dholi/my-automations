@@ -11,7 +11,9 @@ these subcommands can never pull raw transactions into its context (§15.3).
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -21,6 +23,8 @@ import yaml
 import config
 import features as features_mod
 import notify as notify_mod
+import secrets_store
+import simplefin
 import store
 
 
@@ -68,6 +72,27 @@ def cmd_notify(args) -> int:
     return 0
 
 
+def cmd_setup_simplefin(_args) -> int:
+    """Claim a SimpleFIN setup token and store the Access URL in Keychain.
+
+    The token is read hidden (no echo); the resulting Access URL — which embeds
+    credentials — is written straight to Keychain and never printed.
+    """
+    token = getpass.getpass("Paste SimpleFIN setup token (hidden): ").strip()
+    if not token:
+        print("No token entered.", file=sys.stderr)
+        return 1
+    access_url = simplefin.claim_access_url(token)
+    subprocess.run(
+        ["security", "add-generic-password", "-U",
+         "-s", secrets_store.KEYCHAIN_SERVICE, "-a", "SIMPLEFIN_ACCESS_URL",
+         "-w", access_url],
+        check=True,
+    )
+    print(f"Stored SIMPLEFIN_ACCESS_URL in Keychain (url length {len(access_url)}).")
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(prog="finance_cli")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -85,6 +110,8 @@ def main() -> int:
     pn = sub.add_parser("notify")
     pn.add_argument("text", nargs="?", default=None)
     pn.set_defaults(func=cmd_notify)
+
+    sub.add_parser("setup-simplefin").set_defaults(func=cmd_setup_simplefin)
 
     args = p.parse_args()
     return args.func(args)
