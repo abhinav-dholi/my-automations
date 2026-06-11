@@ -9,7 +9,7 @@ import yaml
 import config
 
 VALID_RUNTIMES = {"python", "node", "claude"}
-VALID_TRIGGERS = {"cli", "schedule", "skill", "webhook"}
+VALID_TRIGGERS = {"cli", "schedule", "skill", "webhook", "service"}
 VALID_DEPLOY = {"github-actions", "local-cron", "none"}
 
 

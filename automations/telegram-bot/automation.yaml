@@ -1,0 +1,12 @@
+id: telegram-bot
+description: Always-on Telegram listener — run finance automations on demand via chat commands (/analyze, /sync, /weekly, /status).
+runtime: python
+entry: main.py
+triggers:
+  - cli
+  - service                  # always-on daemon (launchd KeepAlive)
+secrets:
+  - TELEGRAM_TOKEN
+  - TELEGRAM_CHAT_ID
+deploy:
+  target: local-cron         # local daemon; finance stays on-box (§11.5)

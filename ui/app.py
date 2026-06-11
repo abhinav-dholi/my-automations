@@ -127,6 +127,12 @@ def page_finance():
                 [{"account": k, "balance": v} for k, v in weekly["balances"].items()],
                 use_container_width=True, hide_index=True,
             )
+        if weekly.get("splitwise_net"):
+            st.subheader("Splitwise (＋ owed to you)")
+            st.dataframe(
+                [{"currency": k, "net": v} for k, v in weekly["splitwise_net"].items()],
+                use_container_width=True, hide_index=True,
+            )
     else:
         st.info("No finance digest yet. Run `finance-sync` then `finance-weekly`.")
 

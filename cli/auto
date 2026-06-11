@@ -110,8 +110,8 @@ def cmd_deploy(args) -> int:
     import deploy
 
     m = manifest_mod.get(args.id)
-    if "schedule" not in m.triggers:
-        print(f"[auto] '{m.id}' has no 'schedule' trigger — nothing to deploy.")
+    if "schedule" not in m.triggers and "service" not in m.triggers:
+        print(f"[auto] '{m.id}' has no 'schedule' or 'service' trigger — nothing to deploy.")
         return 1
 
     if m.deploy_target == "local-cron":

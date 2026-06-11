@@ -63,27 +63,34 @@ def _calendar_intervals(schedule: str) -> list[dict]:
 
 
 def launchd_plist(m) -> tuple[str, str, Path]:
-    """Return (label, plist_xml, suggested_path) for a local-cron automation."""
-    if not m.schedule:
-        raise DeployError(f"{m.id}: no schedule to deploy.")
-    label = f"{LABEL_PREFIX}.{m.id}"
-    intervals = _calendar_intervals(m.schedule)
-    log_out = str(config.LOGS_DIR / f"{m.id}.scheduled.out")
-    log_err = str(config.LOGS_DIR / f"{m.id}.scheduled.err")
+    """Return (label, plist_xml, suggested_path).
 
+    'service' automations → always-on KeepAlive daemon. Otherwise → a scheduled
+    StartCalendarInterval job from the manifest cron.
+    """
+    label = f"{LABEL_PREFIX}.{m.id}"
+    is_service = "service" in m.triggers
+    trigger = "service" if is_service else "schedule"
     plist = {
         "Label": label,
         # login shell so PATH finds python3/claude/security; cd to repo.
         "ProgramArguments": [
             "/bin/bash", "-lc",
-            f'cd {config.REPO_ROOT!s} && exec {sys.executable} cli/auto run {m.id} --trigger schedule',
+            f'cd {config.REPO_ROOT!s} && exec {sys.executable} cli/auto run {m.id} --trigger {trigger}',
         ],
         "WorkingDirectory": str(config.REPO_ROOT),
-        "StandardOutPath": log_out,
-        "StandardErrorPath": log_err,
-        "RunAtLoad": False,
+        "StandardOutPath": str(config.LOGS_DIR / f"{m.id}.{trigger}.out"),
+        "StandardErrorPath": str(config.LOGS_DIR / f"{m.id}.{trigger}.err"),
     }
-    plist["StartCalendarInterval"] = intervals if len(intervals) > 1 else intervals[0]
+    if is_service:
+        plist["RunAtLoad"] = True
+        plist["KeepAlive"] = True   # restart if it ever exits
+    else:
+        if not m.schedule:
+            raise DeployError(f"{m.id}: no schedule to deploy.")
+        intervals = _calendar_intervals(m.schedule)
+        plist["RunAtLoad"] = False
+        plist["StartCalendarInterval"] = intervals if len(intervals) > 1 else intervals[0]
     xml = plistlib.dumps(plist).decode("utf-8")
     suggested = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
     return label, xml, suggested
