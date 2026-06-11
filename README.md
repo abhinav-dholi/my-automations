@@ -19,8 +19,20 @@ pip install pre-commit && pre-commit install
 ```bash
 python cli/auto list              # list automations
 python cli/auto run <id>          # run one now (resolves secrets, logs the run)
-python cli/auto ui                # launch the Streamlit dashboard (Phase 5)
+python cli/auto ui                # launch the Streamlit dashboard (localhost only)
+python cli/auto skills            # (re)generate /<id> Claude Code skills from manifests
+python cli/auto deploy <id>       # generate the schedule trigger (launchd or Actions)
 ```
+
+### Scheduling (`auto deploy`)
+- **local-cron** automations → a macOS launchd plist in `deploy/launchd/`. Install with the printed `launchctl bootstrap gui/$(id -u) …` commands. launchd uses local time and runs missed jobs on wake.
+- **github-actions** automations → `.github/workflows/<id>.yml` with the cron converted to UTC (add the listed secrets in repo Settings → Actions).
+
+### Skills (`auto skills`)
+Automations with a `skill` trigger become `/<id>` slash commands in Claude Code (written to `.claude/skills/`). `runtime: claude` automations orchestrate in-session; code automations run via `auto run`.
+
+### Dashboard (`auto ui`)
+Streamlit app (binds `127.0.0.1` only): automations table + run-now, run history, finance charts, and a safe manifest editor (never edits secret values).
 
 ## Secrets
 

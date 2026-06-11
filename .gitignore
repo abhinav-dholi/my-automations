@@ -14,6 +14,10 @@ data/
 .cache/
 **/state.json
 
+# Generated from manifests (regenerate via `auto deploy` / `auto skills`)
+deploy/launchd/
+.claude/skills/
+
 # Python
 __pycache__/
 *.pyc

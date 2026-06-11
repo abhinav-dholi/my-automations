@@ -107,13 +107,53 @@ def cmd_ui(_args) -> int:
 
 
 def cmd_deploy(args) -> int:
-    print(f"[auto] deploy '{args.id}' — not implemented yet (Phase 2).")
+    import deploy
+
+    m = manifest_mod.get(args.id)
+    if "schedule" not in m.triggers:
+        print(f"[auto] '{m.id}' has no 'schedule' trigger — nothing to deploy.")
+        return 1
+
+    if m.deploy_target == "local-cron":
+        label, xml, suggested = deploy.launchd_plist(m)
+        out = deploy.LAUNCHD_DIR / f"{label}.plist"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(xml)
+        print(f"[auto] wrote launchd plist: {out}")
+        print("Install (modern launchctl):")
+        print(f"  cp {out} {suggested}")
+        print(f"  launchctl bootstrap gui/$(id -u) {suggested}")
+        print(f"  launchctl enable gui/$(id -u)/{label}")
+        print("Remove:")
+        print(f"  launchctl bootout gui/$(id -u)/{label}")
+        return 0
+
+    if m.deploy_target == "github-actions":
+        yaml, note = deploy.actions_workflow(m)
+        out = deploy.WORKFLOWS_DIR / f"{m.id}.yml"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(yaml)
+        print(f"[auto] wrote workflow: {out}")
+        print(f"[auto] note: {note}")
+        print(f"[auto] add these repo secrets in Settings → Actions: {', '.join(m.secrets) or '(none)'}")
+        return 0
+
+    print(f"[auto] deploy.target '{m.deploy_target}' is not deployable (use local-cron or github-actions).")
     return 1
 
 
 def cmd_skills(_args) -> int:
-    print("[auto] skills — not implemented yet (Phase 3).")
-    return 1
+    import skillgen
+
+    manifests = manifest_mod.discover()
+    written = skillgen.generate_all(manifests)
+    if not written:
+        print("[auto] no automations declare the 'skill' trigger.")
+        return 0
+    for p in written:
+        print(f"[auto] generated skill: /{p.parent.name}  ({p})")
+    print("Restart Claude Code if the .claude/skills/ dir is new; otherwise picked up live.")
+    return 0
 
 
 def main() -> int:

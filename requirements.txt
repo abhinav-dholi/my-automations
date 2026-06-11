@@ -2,6 +2,6 @@
 requests==2.32.3
 PyYAML==6.0.2
 
-# UI (Phase 5) — install when running the dashboard
-# streamlit==1.40.0
-# pandas==2.2.3
+# UI dashboard (auto ui)
+streamlit==1.40.0
+pandas==2.2.3
