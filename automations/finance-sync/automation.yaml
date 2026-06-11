@@ -1,0 +1,14 @@
+id: finance-sync
+description: Ingest accounts, transactions, balances, and holdings from SimpleFIN into the local datastore; apply rule labels.
+runtime: python
+entry: main.py
+triggers:
+  - cli
+  - schedule
+  - skill
+schedule: "0 6 * * *"        # daily 06:00 LOCAL
+tz: America/New_York
+secrets:
+  - SIMPLEFIN_ACCESS_URL
+deploy:
+  target: local-cron         # finance data is local-only, never cloud (§11.5)

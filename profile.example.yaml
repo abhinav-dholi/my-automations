@@ -1,0 +1,13 @@
+# Copy to data/profile.yaml (gitignored) and edit. Feeds the finance-analyze run.
+risk_profile: balanced          # conservative | balanced | aggressive
+horizon_years: 20
+target_allocation:              # desired % by asset class
+  equity: 0.70
+  bonds: 0.20
+  cash: 0.10
+goals:
+  - Build 6-month emergency fund
+  - Max tax-advantaged accounts before taxable
+notes: >
+  Free-text context for the analysis (accounts available, constraints,
+  preferences). Kept local; only aggregated features are sent to Claude.

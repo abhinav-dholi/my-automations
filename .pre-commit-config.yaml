@@ -1,0 +1,7 @@
+# Secret scanner — blocks commits containing token-shaped strings (§11.2).
+# Setup:  pip install pre-commit && pre-commit install
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks

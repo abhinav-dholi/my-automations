@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""`auto` — single front door for all automations.
+
+Commands:
+  auto list             List automations, triggers, schedules.
+  auto run <id>         Resolve secrets, run the automation now.
+  auto ui               Launch the Streamlit dashboard (Phase 5).
+  auto deploy <id>      (stub) Generate the cloud trigger.
+  auto skills           (stub) Generate Claude Code skill wrappers.
+
+Secrets declared in a manifest are resolved in THIS process (one Keychain
+touch) and injected into the child as env vars; the child re-reads them via
+secrets_store (which also registers them for scrubbing).
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+LIB_PY = REPO_ROOT / "lib" / "py"
+sys.path.insert(0, str(LIB_PY))
+
+import manifest as manifest_mod  # noqa: E402
+import runlog  # noqa: E402
+import secrets_store  # noqa: E402
+
+
+def cmd_list(_args) -> int:
+    rows = manifest_mod.discover()
+    if not rows:
+        print("No automations yet. Create automations/<id>/automation.yaml")
+        return 0
+    print(f"{'ID':<20} {'RUNTIME':<8} {'TRIGGERS':<22} {'SCHEDULE':<14} DEPLOY")
+    for m in rows:
+        print(
+            f"{m.id:<20} {m.runtime:<8} {','.join(m.triggers):<22} "
+            f"{(m.schedule or '-'):<14} {m.deploy_target}"
+        )
+    return 0
+
+
+def _runtime_cmd(m: manifest_mod.Manifest) -> list[str]:
+    if m.runtime == "python":
+        return [sys.executable, str(m.entry_path)]
+    if m.runtime == "node":
+        return ["node", str(m.entry_path)]
+    if m.runtime == "claude":
+        return _claude_cmd(m)
+    raise SystemExit(f"Unsupported runtime: {m.runtime}")
+
+
+def _claude_cmd(m: manifest_mod.Manifest) -> list[str]:
+    """Build a headless Claude invocation: Claude orchestrates the run.
+
+    The prompt is the automation's entry file. Tools are whitelisted from the
+    manifest — headless aborts on any unapproved tool, which mechanically
+    enforces the data-egress boundary (e.g. finance only exposes the
+    aggregate `features` tool, never raw queries).
+    """
+    prompt = m.entry_path.read_text()
+    claude_bin = os.environ.get("AUTO_CLAUDE_BIN", "claude")
+    cmd = [claude_bin, "-p", prompt, "--output-format", "json"]
+    # Allowed tools: empty list => fully sandboxed (no tools).
+    cmd += ["--allowedTools", ",".join(m.allowed_tools)]
+    return cmd
+
+
+def cmd_run(args) -> int:
+    m = manifest_mod.get(args.id)
+
+    # Resolve declared secrets once here; inject into child env.
+    child_env = os.environ.copy()
+    for name in m.secrets:
+        value = secrets_store.get(name, required=True)
+        child_env[name] = value
+    # Make shared lib importable in the child.
+    child_env["PYTHONPATH"] = os.pathsep.join(
+        [str(LIB_PY), child_env.get("PYTHONPATH", "")]
+    ).strip(os.pathsep)
+
+    # Claude-orchestrated runs execute from repo root so whitelisted tool
+    # paths (lib/py/...) resolve; code runs from their own folder.
+    cwd = REPO_ROOT if m.runtime == "claude" else m.dir
+
+    trigger = "cli" if not args.trigger else args.trigger
+    with runlog.record(m.id, trigger):
+        result = subprocess.run(_runtime_cmd(m), env=child_env, cwd=str(cwd))
+        if result.returncode != 0:
+            raise SystemExit(f"Automation '{m.id}' exited with {result.returncode}")
+    print(f"[auto] '{m.id}' completed ok.")
+    return 0
+
+
+def cmd_ui(_args) -> int:
+    app = REPO_ROOT / "ui" / "app.py"
+    if not app.exists():
+        print("UI not built yet (Phase 5). Expected ui/app.py")
+        return 1
+    # Localhost only — never expose finance data on the network (§13.3).
+    return subprocess.call(
+        ["streamlit", "run", str(app), "--server.address", "127.0.0.1"]
+    )
+
+
+def cmd_deploy(args) -> int:
+    print(f"[auto] deploy '{args.id}' — not implemented yet (Phase 2).")
+    return 1
+
+
+def cmd_skills(_args) -> int:
+    print("[auto] skills — not implemented yet (Phase 3).")
+    return 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="auto")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("list").set_defaults(func=cmd_list)
+
+    p_run = sub.add_parser("run")
+    p_run.add_argument("id")
+    p_run.add_argument("--trigger", default=None,
+                       help="Override the trigger label recorded in logs.")
+    p_run.set_defaults(func=cmd_run)
+
+    sub.add_parser("ui").set_defaults(func=cmd_ui)
+
+    p_dep = sub.add_parser("deploy")
+    p_dep.add_argument("id")
+    p_dep.set_defaults(func=cmd_deploy)
+
+    sub.add_parser("skills").set_defaults(func=cmd_skills)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

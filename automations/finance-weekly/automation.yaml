@@ -1,0 +1,15 @@
+id: finance-weekly
+description: Pull last 7 days of transactions from SimpleFIN, categorize, summarize spend + balances, send to Telegram.
+runtime: python
+entry: main.py
+triggers:
+  - cli
+  - schedule
+  - skill
+schedule: "0 8 * * 1"        # Mondays 08:00 LOCAL time
+tz: America/New_York         # auto deploy converts to UTC cron for Actions
+secrets:
+  - TELEGRAM_TOKEN
+  - TELEGRAM_CHAT_ID
+deploy:
+  target: local-cron         # reads local finance DB; data never leaves box (§11.5)
