@@ -255,8 +255,15 @@ def page_spending():
     st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("Transactions — edit categories")
-    st.caption("Change a category and click Save. Manual edits override the rules "
-               "and are remembered across every re-sync.")
+    ec1, ec2 = st.columns([3, 1])
+    ec1.caption("Change a category and Save — manual edits override everything, are "
+                "remembered, and re-tag matching transactions. Or let AI categorize the rest.")
+    if ec2.button("🤖 AI-categorize Other"):
+        with st.spinner("Claude categorizing…"):
+            res = subprocess.run([sys.executable, "cli/auto", "run", "finance-categorize"],
+                                 cwd=str(REPO_ROOT), capture_output=True, text=True)
+        (st.success if res.returncode == 0 else st.error)((res.stdout or res.stderr).strip()[-200:])
+        st.cache_data.clear(); st.rerun()
     allt = df.copy().sort_values("date", ascending=False)
 
     fc1, fc2 = st.columns([2, 3])

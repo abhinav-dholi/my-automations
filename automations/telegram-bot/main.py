@@ -19,14 +19,16 @@ import secrets_store
 # command -> automation id(s) to run in order
 COMMANDS = {
     "/analyze": ["finance-analyze"],
-    "/sync": ["finance-sync", "splitwise-sync"],
+    "/sync": ["finance-sync", "splitwise-sync", "finance-categorize"],
+    "/categorize": ["finance-categorize"],
     "/weekly": ["finance-weekly"],
 }
 HELP = (
     "Commands:\n"
     "/analyze — run the finance analysis (sends a report here)\n"
     "/finance <question> — ask anything about your finances in plain English\n"
-    "/sync — pull latest bank + Splitwise data\n"
+    "/sync — pull latest data + AI-categorize\n"
+    "/categorize — AI-categorize uncategorized transactions\n"
     "/weekly — weekly spend/balance digest\n"
     "/status — last run of each automation\n"
     "/help — this message"

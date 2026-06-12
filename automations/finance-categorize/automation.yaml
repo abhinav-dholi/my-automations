@@ -1,0 +1,14 @@
+id: finance-categorize
+description: Use Claude to categorize transactions the rules left as Other/Uncategorized (label_source=ai; manual edits still win).
+runtime: python
+entry: main.py
+triggers:
+  - cli
+  - schedule
+  - skill
+schedule: "45 6 * * *"        # daily 06:45 LOCAL, after sync
+tz: America/New_York
+secrets:
+  - CLAUDE_CODE_OAUTH_TOKEN
+deploy:
+  target: local-cron          # sends descriptions to Claude; local-only run

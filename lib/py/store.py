@@ -270,13 +270,16 @@ def splitwise_share_since(conn, since_iso: str) -> float:
     ).fetchone()
     return round(row["s"], 2)
 
-# Effective category: a manual override wins over the rule label.
+# Effective category precedence: manual (user) > ai (Claude) > rule (keywords).
 _CATEGORY_SELECT = """
     SELECT t.*,
-           COALESCE(lm.category, lr.category, 'Uncategorized') AS category,
-           CASE WHEN lm.category IS NOT NULL THEN 'manual' ELSE 'rule' END AS label_source
+           COALESCE(lm.category, la.category, lr.category, 'Uncategorized') AS category,
+           CASE WHEN lm.category IS NOT NULL THEN 'manual'
+                WHEN la.category IS NOT NULL THEN 'ai'
+                ELSE 'rule' END AS label_source
     FROM transactions t
     LEFT JOIN transaction_labels lm ON lm.txn_id=t.id AND lm.label_source='manual'
+    LEFT JOIN transaction_labels la ON la.txn_id=t.id AND la.label_source='ai'
     LEFT JOIN transaction_labels lr ON lr.txn_id=t.id AND lr.label_source='rule'
 """
 
