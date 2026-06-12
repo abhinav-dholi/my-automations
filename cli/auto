@@ -98,12 +98,17 @@ def cmd_run(args) -> int:
 def cmd_ui(_args) -> int:
     app = REPO_ROOT / "ui" / "app.py"
     if not app.exists():
-        print("UI not built yet (Phase 5). Expected ui/app.py")
+        print("UI not built yet. Expected ui/app.py")
         return 1
-    # Localhost only — never expose finance data on the network (§13.3).
-    return subprocess.call(
-        ["streamlit", "run", str(app), "--server.address", "127.0.0.1"]
-    )
+    # Kill any existing dashboard instances so we never accumulate ports.
+    subprocess.run(["pkill", "-9", "-f", f"streamlit run {app}"],
+                   capture_output=True)
+    # Single fixed port, localhost only — never expose finance data (§13.3).
+    return subprocess.call([
+        "streamlit", "run", str(app),
+        "--server.address", "127.0.0.1",
+        "--server.port", "8501",
+    ])
 
 
 def cmd_deploy(args) -> int:
