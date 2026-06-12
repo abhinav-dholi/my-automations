@@ -1,4 +1,5 @@
 id: telegram-bot
+category: finance
 description: Always-on Telegram listener — run finance automations on demand via chat commands (/analyze, /sync, /weekly, /status).
 runtime: python
 entry: main.py

@@ -1,4 +1,5 @@
 id: finance-weekly
+category: finance
 description: Pull last 7 days of transactions from SimpleFIN, categorize, summarize spend + balances, send to Telegram.
 runtime: python
 entry: main.py

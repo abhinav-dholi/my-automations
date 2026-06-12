@@ -29,17 +29,107 @@ import runlog  # noqa: E402
 import secrets_store  # noqa: E402
 
 
-def cmd_list(_args) -> int:
-    rows = manifest_mod.discover()
-    if not rows:
-        print("No automations yet. Create automations/<id>/automation.yaml")
-        return 0
-    print(f"{'ID':<20} {'RUNTIME':<8} {'TRIGGERS':<22} {'SCHEDULE':<14} DEPLOY")
+def _by_category(rows):
+    cats: dict[str, list] = {}
     for m in rows:
-        print(
-            f"{m.id:<20} {m.runtime:<8} {','.join(m.triggers):<22} "
-            f"{(m.schedule or '-'):<14} {m.deploy_target}"
-        )
+        cats.setdefault(m.category, []).append(m)
+    return dict(sorted(cats.items()))
+
+
+def cmd_list(args) -> int:
+    rows = manifest_mod.discover()
+    if getattr(args, "category", None):
+        rows = [m for m in rows if m.category == args.category]
+    if not rows:
+        print("No automations. Create automations/<id>/automation.yaml")
+        return 0
+    for cat, items in _by_category(rows).items():
+        print(f"\n▸ {cat}")
+        print(f"  {'ID':<20} {'RUNTIME':<8} {'TRIGGERS':<22} {'SCHEDULE':<13} DEPLOY")
+        for m in items:
+            print(f"  {m.id:<20} {m.runtime:<8} {','.join(m.triggers):<22} "
+                  f"{(m.schedule or '-'):<13} {m.deploy_target}")
+    return 0
+
+
+def cmd_status(args) -> int:
+    import service
+    rows = manifest_mod.discover()
+    if getattr(args, "category", None):
+        rows = [m for m in rows if m.category == args.category]
+    latest = {}
+    for rec in runlog.read_recent(500):
+        latest[rec["id"]] = rec
+    for cat, items in _by_category(rows).items():
+        print(f"\n▸ {cat}")
+        print(f"  {'ID':<20} {'SERVICE':<14} {'PID':<8} {'LAST RUN':<14} STATUS")
+        for m in items:
+            if not m.managed:
+                svc, pid = "on-demand", "-"
+            else:
+                loaded = service.is_loaded(m.id)
+                svc = "running" if loaded else "stopped"
+                pid = service.pid(m.id) or "-" if loaded else "-"
+            last = latest.get(m.id, {})
+            print(f"  {m.id:<20} {svc:<14} {str(pid):<8} "
+                  f"{last.get('status','-'):<14} {last.get('end','-')}")
+    return 0
+
+
+def _targets(spec: str):
+    """Resolve an id, a category name, or 'all' to a list of managed manifests."""
+    rows = [m for m in manifest_mod.discover() if m.managed]
+    if spec == "all":
+        return rows
+    by_cat = [m for m in rows if m.category == spec]
+    if by_cat:
+        return by_cat
+    return [m for m in rows if m.id == spec]
+
+
+def cmd_start(args) -> int:
+    import service
+    targets = _targets(args.target)
+    if not targets:
+        print(f"No managed automation/category matching '{args.target}'.")
+        return 1
+    for m in targets:
+        ok, err = service.install(m)
+        print(f"{'✅' if ok else '⚠️ '} start {m.id}" + (f"  ({err})" if err and not ok else ""))
+    return 0
+
+
+def cmd_stop(args) -> int:
+    import service
+    targets = _targets(args.target)
+    if not targets:
+        print(f"No managed automation/category matching '{args.target}'.")
+        return 1
+    for m in targets:
+        ok = service.uninstall(m.id)
+        print(f"{'✅' if ok else '⚠️ '} stop {m.id}")
+    return 0
+
+
+def cmd_restart(args) -> int:
+    cmd_stop(args)
+    return cmd_start(args)
+
+
+def cmd_logs(args) -> int:
+    import config as cfg
+    base = cfg.LOGS_DIR
+    shown = False
+    for suffix in (f"{args.id}.service", f"{args.id}.schedule"):
+        for stream in ("out", "err"):
+            p = base / f"{suffix}.{stream}"
+            if p.exists():
+                shown = True
+                print(f"\n=== {p.name} (tail) ===")
+                lines = p.read_text(errors="replace").splitlines()
+                print("\n".join(lines[-args.lines:]))
+    if not shown:
+        print(f"No logs for '{args.id}' yet. (Run it, or check logs/runs.jsonl.)")
     return 0
 
 
@@ -161,25 +251,76 @@ def cmd_skills(_args) -> int:
     return 0
 
 
+def cmd_update(args) -> int:
+    """Apply latest code: pull (if a git remote exists), regenerate skills, and
+    reinstall/restart all managed services so they run the new code."""
+    import service
+
+    # Optional git pull — only if a remote is configured.
+    remote = subprocess.run(["git", "remote"], cwd=str(REPO_ROOT),
+                            capture_output=True, text=True).stdout.strip()
+    if remote and not args.no_pull:
+        print("[auto] git pull…")
+        subprocess.run(["git", "pull", "--ff-only"], cwd=str(REPO_ROOT))
+
+    cmd_skills(args)
+
+    managed = [m for m in manifest_mod.discover() if m.managed]
+    if args.category:
+        managed = [m for m in managed if m.category == args.category]
+    print(f"[auto] restarting {len(managed)} service(s) on latest code…")
+    for m in managed:
+        if service.is_loaded(m.id):           # only restart ones already running
+            ok, err = service.install(m)
+            print(f"  {'✅' if ok else '⚠️ '} {m.id}")
+    print("[auto] UI: run `auto ui` to relaunch the dashboard on the latest code.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="auto")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("list").set_defaults(func=cmd_list)
+    p_list = sub.add_parser("list", help="list automations (grouped by category)")
+    p_list.add_argument("--category", default=None)
+    p_list.set_defaults(func=cmd_list)
 
-    p_run = sub.add_parser("run")
+    p_status = sub.add_parser("status", help="show service state + last run")
+    p_status.add_argument("--category", default=None)
+    p_status.set_defaults(func=cmd_status)
+
+    p_run = sub.add_parser("run", help="run an automation now")
     p_run.add_argument("id")
     p_run.add_argument("--trigger", default=None,
                        help="Override the trigger label recorded in logs.")
     p_run.set_defaults(func=cmd_run)
 
-    sub.add_parser("ui").set_defaults(func=cmd_ui)
+    for name, fn, helptext in [
+        ("start", cmd_start, "install+start service(s): <id>, <category>, or all"),
+        ("stop", cmd_stop, "stop service(s): <id>, <category>, or all"),
+        ("restart", cmd_restart, "restart service(s): <id>, <category>, or all"),
+    ]:
+        p = sub.add_parser(name, help=helptext)
+        p.add_argument("target", help="automation id, category name, or 'all'")
+        p.set_defaults(func=fn)
 
-    p_dep = sub.add_parser("deploy")
+    p_logs = sub.add_parser("logs", help="tail an automation's service/schedule logs")
+    p_logs.add_argument("id")
+    p_logs.add_argument("--lines", type=int, default=30)
+    p_logs.set_defaults(func=cmd_logs)
+
+    sub.add_parser("ui", help="launch the dashboard (localhost:8501)").set_defaults(func=cmd_ui)
+
+    p_dep = sub.add_parser("deploy", help="generate a schedule trigger (advanced)")
     p_dep.add_argument("id")
     p_dep.set_defaults(func=cmd_deploy)
 
-    sub.add_parser("skills").set_defaults(func=cmd_skills)
+    sub.add_parser("skills", help="(re)generate Claude Code skills").set_defaults(func=cmd_skills)
+
+    p_up = sub.add_parser("update", help="apply latest code: pull + skills + restart services")
+    p_up.add_argument("--category", default=None)
+    p_up.add_argument("--no-pull", action="store_true")
+    p_up.set_defaults(func=cmd_update)
 
     args = parser.parse_args()
     return args.func(args)

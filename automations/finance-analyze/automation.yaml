@@ -1,4 +1,5 @@
 id: finance-analyze
+category: finance
 description: Claude orchestrates a multi-lens analysis of your finances over anonymized feature packs and writes an investing-oriented report.
 runtime: claude
 entry: prompt.md

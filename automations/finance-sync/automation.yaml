@@ -1,4 +1,5 @@
 id: finance-sync
+category: finance
 description: Ingest accounts, transactions, balances, and holdings from SimpleFIN into the local datastore; apply rule labels.
 runtime: python
 entry: main.py

@@ -1,4 +1,5 @@
 id: splitwise-sync
+category: finance
 description: Ingest Splitwise friend balances and your share of expenses into the local datastore.
 runtime: python
 entry: main.py

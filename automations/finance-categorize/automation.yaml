@@ -1,4 +1,5 @@
 id: finance-categorize
+category: finance
 description: Use Claude to categorize transactions the rules left as Other/Uncategorized (label_source=ai; manual edits still win).
 runtime: python
 entry: main.py

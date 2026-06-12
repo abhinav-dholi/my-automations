@@ -21,6 +21,7 @@ class ManifestError(Exception):
 class Manifest:
     id: str
     description: str
+    category: str
     runtime: str
     entry: str
     triggers: list[str]
@@ -30,6 +31,11 @@ class Manifest:
     deploy_target: str
     allowed_tools: list[str]
     dir: Path
+
+    @property
+    def managed(self) -> bool:
+        """Has a launchd-installable trigger (scheduled or always-on service)."""
+        return "schedule" in self.triggers or "service" in self.triggers
 
     @property
     def entry_path(self) -> Path:
@@ -72,6 +78,7 @@ def load(manifest_path: Path) -> Manifest:
     return Manifest(
         id=_require(data, "id", manifest_path),
         description=data.get("description", ""),
+        category=data.get("category", "general"),
         runtime=runtime,
         entry=_require(data, "entry", manifest_path),
         triggers=triggers,
