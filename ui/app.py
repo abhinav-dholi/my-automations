@@ -72,7 +72,7 @@ def _profile() -> dict:
 def load_finance_db() -> dict:
     """Pull everything the dashboard needs in one cached snapshot."""
     import time
-    since = int(time.time()) - 90 * 86400
+    since = int(time.time()) - 400 * 86400
     since_iso = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime(since))
     with store.connect() as c:
         txns = [dict(r) for r in store.transactions_since(c, since)]
@@ -201,17 +201,36 @@ def page_spending():
     df = pd.DataFrame(db["txns"])
     if df.empty:
         st.info("No transactions."); return
+    df["date"] = pd.to_datetime(df["posted"], unit="s")
+
+    # Date-range picker.
+    import time as _t
+    presets = {"30 days": 30, "90 days": 90, "6 months": 180, "1 year": 365, "All": 3650}
+    rc1, rc2 = st.columns([3, 2])
+    choice = rc1.radio("Range", list(presets) + ["Custom"], horizontal=True, index=1)
+    now = int(_t.time())
+    if choice == "Custom":
+        dmin = df["date"].min().date()
+        dmax = df["date"].max().date()
+        rng = rc2.date_input("Custom range", value=(dmin, dmax), min_value=dmin, max_value=dmax)
+        if isinstance(rng, tuple) and len(rng) == 2:
+            start = int(pd.Timestamp(rng[0]).timestamp()); end = int(pd.Timestamp(rng[1]).timestamp()) + 86399
+        else:
+            start, end = now - 90 * 86400, now
+    else:
+        start, end = now - presets[choice] * 86400, now
+
+    df = df[(df["posted"] >= start) & (df["posted"] <= end)]
 
     # Spend = negative, excluding money-movement categories.
     spend = df[(df["amount"] < 0) & (~df["category"].isin(finance_rules.NON_SPEND))].copy()
     spend["spend"] = spend["amount"].abs()
-    spend["date"] = pd.to_datetime(spend["posted"], unit="s")
 
-    total = spend["spend"].sum()
-    c = st.columns(3)
-    c[0].metric("Total spend (90d)", _money(total))
-    c[1].metric("Transactions", len(spend))
-    c[2].metric("Top category", spend.groupby("category")["spend"].sum().idxmax() if len(spend) else "—")
+    c = st.columns(4)
+    c[0].metric("Total spend", _money(spend["spend"].sum()))
+    c[1].metric("Income", _money(df[df["category"] == "Income"]["amount"].sum()))
+    c[2].metric("Transactions", len(spend))
+    c[3].metric("Top category", spend.groupby("category")["spend"].sum().idxmax() if len(spend) else "—")
 
     left, right = st.columns(2)
     with left:
@@ -238,9 +257,7 @@ def page_spending():
     st.subheader("Transactions — edit categories")
     st.caption("Change a category and click Save. Manual edits override the rules "
                "and are remembered across every re-sync.")
-    allt = pd.DataFrame(db["txns"]).copy()
-    allt["date"] = pd.to_datetime(allt["posted"], unit="s")
-    allt = allt.sort_values("date", ascending=False)
+    allt = df.copy().sort_values("date", ascending=False)
 
     fc1, fc2 = st.columns([2, 3])
     cats = sorted(allt["category"].unique())

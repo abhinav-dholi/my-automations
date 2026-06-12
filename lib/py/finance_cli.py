@@ -44,6 +44,11 @@ def cmd_features(args) -> int:
     return 0
 
 
+def cmd_window(args) -> int:
+    print(json.dumps(features_mod.window_summary(args.days), indent=2))
+    return 0
+
+
 def cmd_store_insight(args) -> int:
     # Prefer --json (single-line, permission-friendly); fall back to stdin.
     payload = args.json if args.json is not None else sys.stdin.read()
@@ -102,8 +107,12 @@ def main() -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pf = sub.add_parser("features")
-    pf.add_argument("--lookback", type=int, default=90)
+    pf.add_argument("--lookback", type=int, default=400)
     pf.set_defaults(func=cmd_features)
+
+    pw = sub.add_parser("window")
+    pw.add_argument("--days", type=int, default=30)
+    pw.set_defaults(func=cmd_window)
 
     ps = sub.add_parser("store-insight")
     ps.add_argument("--agent", default="finance-analyze")

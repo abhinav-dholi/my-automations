@@ -21,6 +21,37 @@ def _ym(posted: int) -> str:
     return time.strftime("%Y-%m", time.localtime(posted))
 
 
+def window_summary(days: int) -> dict:
+    """RAW totals over exactly the last `days` (not a monthly average).
+
+    For precise date-bounded questions like "spent on travel in the last 45 days".
+    """
+    now = int(time.time())
+    since = now - days * 86400
+    with store.connect() as conn:
+        txns = store.transactions_between(conn, since, now)
+    by_cat: dict[str, float] = {}
+    spend = income = movement = 0.0
+    for t in txns:
+        cat, amt = t["category"], t["amount"]
+        if cat == "Income":
+            if amt > 0:
+                income += amt
+        elif cat in finance_rules.NON_SPEND:
+            movement += abs(amt)
+        elif amt < 0:
+            by_cat[cat] = by_cat.get(cat, 0.0) + abs(amt)
+            spend += abs(amt)
+    return {
+        "window_days": days,
+        "total_spend": round(spend, 2),
+        "total_income": round(income, 2),
+        "spend_by_category": {k: round(v, 2) for k, v in sorted(by_cat.items(), key=lambda x: -x[1])},
+        "excluded_movement": round(movement, 2),
+        "txn_count": len(txns),
+    }
+
+
 def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dict:
     since = int(time.time()) - lookback_days * 86400
     since_iso = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime(since))
@@ -107,6 +138,21 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
     ]
     top_concentration = max((a["pct_of_portfolio"] for a in allocation), default=0.0)
 
+    # Deterministic current allocation across investable assets (liquid cash +
+    # investments), so the analysis is consistent run-to-run. Bonds detected by
+    # symbol/name; everything else in investments counts as equity.
+    BOND_SYMS = {"BND", "AGG", "BNDX", "BIV", "VCIT", "VGIT", "SCHZ", "GOVT"}
+    bond_val = sum(h["market_value"] for h in funded_holdings
+                   if h["symbol"] in BOND_SYMS or "bond" in (h["name"] or "").lower())
+    equity_val = max(invest_total - bond_val, 0.0)
+    investable_base = round(liquid + invest_total, 2)
+    alloc_current = {
+        "equity": round(equity_val / investable_base, 3) if investable_base else 0.0,
+        "bonds": round(bond_val / investable_base, 3) if investable_base else 0.0,
+        "cash": round(liquid / investable_base, 3) if investable_base else 0.0,
+    }
+    alloc_target = (profile or {}).get("target_allocation", {})
+
     return {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "lookback_days": lookback_days,
@@ -132,8 +178,15 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
         },
         "portfolio": {
             "invested_total": round(invest_total, 2),
-            "allocation": allocation,
+            "holdings": allocation,
             "top_concentration_pct": round(top_concentration, 3),
+        },
+        "allocation": {
+            # % across investable assets (liquid cash + investments). Use these
+            # verbatim in analysis — do not redefine the denominator.
+            "investable_base": investable_base,
+            "current": alloc_current,
+            "target": alloc_target,
         },
         "net_worth": net_worth,
         "splitwise": {

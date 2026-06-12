@@ -16,22 +16,23 @@ import sys
 
 import config
 
-ALLOWED_TOOLS = "Bash(python3 lib/py/finance_cli.py features:*)"
+ALLOWED_TOOLS = "Bash(python3 lib/py/finance_cli.py:*)"
 
 PROMPT_TEMPLATE = """\
 Answer the user's personal-finance question using ONLY their own data.
 
-Get the data by running: python3 lib/py/finance_cli.py features
-That returns anonymized aggregates (cashflow, spend by category, resilience,
-portfolio allocation, net worth, Splitwise). It is your ONLY data source — there
-is no raw-transaction access by design.
+Tools (your only data sources — no raw-transaction access by design):
+- `python3 lib/py/finance_cli.py features` — typical-month aggregates (median
+  monthly income/spend, spend by category, resilience, allocation, net worth,
+  Splitwise, monthly_series).
+- `python3 lib/py/finance_cli.py window --days N` — EXACT raw totals over the
+  last N days (use this for time-bounded questions like "last 45 days").
 
 Rules:
-- Use ONLY numbers from `features`; never invent figures. Cite the relevant
-  number(s) in your answer.
+- Pick the right tool: typical/monthly → features; "last N days/weeks" → window.
+- Use ONLY returned numbers; never invent or extrapolate. Cite the number(s).
 - Spend already excludes transfers, card payments, and investment moves.
-- Be concise and direct (a few sentences). This is informational, not licensed
-  financial advice.
+- Be concise and direct. Informational, not licensed financial advice.
 
 User question: {question}
 """
