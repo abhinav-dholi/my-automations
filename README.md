@@ -14,6 +14,17 @@ pip install -r requirements.txt
 pip install pre-commit && pre-commit install
 ```
 
+## Install the `auto` command (run from anywhere)
+
+```bash
+ln -sf "$(pwd)/bin/auto" ~/.local/bin/auto        # ~/.local/bin must be on PATH
+# optional alias (zsh):
+echo "alias auto='$(pwd)/bin/auto'" >> ~/.zshrc && source ~/.zshrc
+```
+Then `auto <cmd>` works from any directory (the launcher resolves the repo and
+uses the Python that has the deps). Examples below show `python cli/auto` but
+`auto` is equivalent.
+
 ## Usage
 
 ```bash

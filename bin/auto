@@ -1,0 +1,21 @@
+#!/bin/bash
+# Global launcher for the `auto` CLI — run from any directory.
+# Install: symlink onto your PATH, e.g.
+#   ln -sf "$(pwd)/bin/auto" ~/.local/bin/auto
+# Resolves the repo via this script's location (following symlinks), so it works
+# from anywhere and even if the repo moves.
+set -e
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+REPO="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+
+# Prefer the framework Python (has all deps incl. streamlit); else python3.
+PY="$(command -v python3)"
+FW="/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+[ -x "$FW" ] && PY="$FW"
+
+exec "$PY" "$REPO/cli/auto" "$@"
