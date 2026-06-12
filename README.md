@@ -17,16 +17,23 @@ pip install pre-commit && pre-commit install
 ## Usage
 
 ```bash
-python cli/auto list              # list automations
-python cli/auto run <id>          # run one now (resolves secrets, logs the run)
-python cli/auto ui                # launch the Streamlit dashboard (localhost only)
-python cli/auto skills            # (re)generate /<id> Claude Code skills from manifests
-python cli/auto deploy <id>       # generate the schedule trigger (launchd or Actions)
+python cli/auto list [--category C]      # list automations, grouped by category
+python cli/auto status [--category C]    # service state (running/stopped) + last run
+python cli/auto run <id>                 # run one now (resolves secrets, logs it)
+python cli/auto start|stop|restart <id|category|all>   # manage launchd services
+python cli/auto logs <id> [--lines N]    # tail service/schedule logs
+python cli/auto ui                       # dashboard on 127.0.0.1:8501 (single instance)
+python cli/auto skills                   # (re)generate /<id> Claude Code skills
+python cli/auto update [--category C]    # apply latest code: pull + skills + restart services
+python cli/auto deploy <id>              # (advanced) just generate the schedule trigger
 ```
 
-### Scheduling (`auto deploy`)
-- **local-cron** automations → a macOS launchd plist in `deploy/launchd/`. Install with the printed `launchctl bootstrap gui/$(id -u) …` commands. launchd uses local time and runs missed jobs on wake.
-- **github-actions** automations → `.github/workflows/<id>.yml` with the cron converted to UTC (add the listed secrets in repo Settings → Actions).
+### Services & scheduling
+`auto start <id|category|all>` installs a macOS launchd job (scheduled jobs use
+local time and run missed jobs on wake; `service`-trigger automations run as
+KeepAlive daemons). Manage with `start`/`stop`/`restart`/`status`/`logs`.
+`github-actions`-target automations instead emit `.github/workflows/<id>.yml`
+(cron converted to UTC; add the listed secrets in repo Settings → Actions).
 
 ### Skills (`auto skills`)
 Automations with a `skill` trigger become `/<id>` slash commands in Claude Code (written to `.claude/skills/`). `runtime: claude` automations orchestrate in-session; code automations run via `auto run`.
@@ -73,8 +80,11 @@ One-time setup:
 ## Layout
 
 ```
-automations/<id>/   automation.yaml + entry point
-lib/py/             shared helpers (secrets, logging, notify, manifest, clients)
-cli/auto            the runner
-ui/                 Streamlit dashboard (Phase 5)
+automations/<category>/<id>/   automation.yaml + entry point  (e.g. automations/finance/finance-sync/)
+lib/py/                        shared + domain helpers (secrets, logging, notify, manifest, finance clients)
+cli/auto                       the runner + service manager
+ui/                            Streamlit dashboard
 ```
+
+Finance is the first category. New domains are new folders under `automations/<domain>/`.
+The Telegram bot namespaces commands per domain (`/finance …`, plus global `/run`, `/status`, `/help`).

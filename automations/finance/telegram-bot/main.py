@@ -16,40 +16,46 @@ import requests
 import config
 import secrets_store
 
-# command -> automation id(s) to run in order
-COMMANDS = {
-    "/analyze": ["finance-analyze"],
-    "/sync": ["finance-sync", "splitwise-sync", "finance-categorize"],
-    "/categorize": ["finance-categorize"],
-    "/weekly": ["finance-weekly"],
+# Commands are namespaced by domain so the bot scales beyond finance.
+# Global commands work across all domains; /finance is the finance namespace.
+GLOBAL = {"/help", "/start", "/status", "/run", "/finance"}
+
+# Finance subcommand -> automation id(s) to run in order.
+FINANCE_ACTIONS = {
+    "sync": ["finance-sync", "splitwise-sync", "finance-categorize"],
+    "analyze": ["finance-analyze"],
+    "categorize": ["finance-categorize"],
+    "weekly": ["finance-weekly"],
 }
+
 HELP = (
     "Commands:\n"
-    "/analyze — run the finance analysis (sends a report here)\n"
-    "/finance <question> — ask anything about your finances in plain English\n"
-    "/sync — pull latest data + AI-categorize\n"
-    "/categorize — AI-categorize uncategorized transactions\n"
-    "/weekly — weekly spend/balance digest\n"
-    "/status — last run of each automation\n"
-    "/help — this message"
+    "/finance <question> — ask about your finances (plain English)\n"
+    "/finance sync|analyze|categorize|weekly — run a finance job\n"
+    "/run <automation-id> — run any automation by id\n"
+    "/status — service + last-run status\n"
+    "/help — this message\n"
+    "(Other domains will add their own /<domain> namespace.)"
+)
+FINANCE_HELP = (
+    "Finance:\n"
+    "/finance <question> — natural-language Q&A\n"
+    "/finance sync — pull bank + Splitwise + AI-categorize\n"
+    "/finance analyze — full AI analysis report\n"
+    "/finance categorize — AI-categorize new transactions\n"
+    "/finance weekly — weekly spend/balance digest"
 )
 
-# Commands that take a free-text question after the token.
-ASK_COMMANDS = {"/finance", "/ask"}
 
-
-def parse_command(text: str) -> str | None:
-    """Return the normalized command token (e.g. '/analyze') or None."""
+def root_command(text: str) -> str | None:
+    """Return the namespaced root command (e.g. '/finance', '/run') or None."""
     if not text:
         return None
-    tok = text.strip().split()[0].lower()
-    tok = tok.split("@")[0]  # strip /cmd@botname
-    known = set(COMMANDS) | ASK_COMMANDS | {"/status", "/help", "/start"}
-    return tok if tok in known else None
+    tok = text.strip().split()[0].lower().split("@")[0]  # strip /cmd@botname
+    return tok if tok in GLOBAL else None
 
 
-def _question_after(text: str) -> str:
-    """Strip the leading command token, return the rest (the question)."""
+def _rest(text: str) -> str:
     parts = text.strip().split(maxsplit=1)
     return parts[1].strip() if len(parts) > 1 else ""
 
@@ -91,6 +97,18 @@ def _run(automation_id: str) -> tuple[bool, str]:
     return ok, (tail[-1] if tail else f"exit {res.returncode}")
 
 
+def _run_and_report(token: str, chat_id: str, aid: str) -> None:
+    _send(token, chat_id, f"▶ running {aid}…")
+    ok, msg = _run(aid)
+    _send(token, chat_id, f"{'✅' if ok else '❌'} {aid}: {msg}")
+
+
+def _known_ids() -> set[str]:
+    sys.path.insert(0, str(config.LIB_PY))
+    import manifest
+    return {m.id for m in manifest.discover()}
+
+
 def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
     if cmd in ("/help", "/start"):
         _send(token, chat_id, HELP)
@@ -98,20 +116,31 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
     if cmd == "/status":
         _send(token, chat_id, _status_text())
         return
-    if cmd in ASK_COMMANDS:
-        question = _question_after(text)
-        if not question:
-            _send(token, chat_id, "Ask a question, e.g. /finance how much did I spend on dining?")
-            return
-        _send(token, chat_id, "💭 thinking…")
-        sys.path.insert(0, str(config.LIB_PY))
-        import finance_ask
-        _send(token, chat_id, finance_ask.answer(question))
+    if cmd == "/run":
+        rest = _rest(text)
+        aid = rest.split()[0] if rest else ""
+        if not aid:
+            _send(token, chat_id, "Usage: /run <automation-id>. See /status for ids.")
+        elif aid not in _known_ids():
+            _send(token, chat_id, f"Unknown automation '{aid}'. See /status for ids.")
+        else:
+            _run_and_report(token, chat_id, aid)
         return
-    for aid in COMMANDS[cmd]:
-        _send(token, chat_id, f"▶ running {aid}…")
-        ok, msg = _run(aid)
-        _send(token, chat_id, f"{'✅' if ok else '❌'} {aid}: {msg}")
+    if cmd == "/finance":
+        rest = _rest(text)
+        if not rest:
+            _send(token, chat_id, FINANCE_HELP)
+            return
+        first = rest.split()[0].lower()
+        if first in FINANCE_ACTIONS:
+            for aid in FINANCE_ACTIONS[first]:
+                _run_and_report(token, chat_id, aid)
+        else:                              # treat the whole thing as a question
+            _send(token, chat_id, "💭 thinking…")
+            sys.path.insert(0, str(config.LIB_PY))
+            import finance_ask
+            _send(token, chat_id, finance_ask.answer(rest))
+        return
 
 
 def main() -> None:
@@ -144,7 +173,7 @@ def main() -> None:
             if from_chat != chat_id:        # security: ignore everyone else
                 print(f"[telegram-bot] ignored (chat {from_chat} != {chat_id})", flush=True)
                 continue
-            cmd = parse_command(text)
+            cmd = root_command(text)
             if cmd:
                 print(f"[telegram-bot] handling {cmd}", flush=True)
                 try:

@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-Personal automation platform. Automations live in `automations/<id>/` with a
-manifest; each runs on a schedule, on demand (CLI/UI/Telegram), or as a Claude
-Code skill. **Finance is the first category** — the platform is general; new
-domains are added as new automations with a different `category`. Full design in
-[PRD.md](PRD.md).
+Personal automation platform. Automations live in `automations/<category>/<id>/`
+with a manifest; each runs on a schedule, on demand (CLI/UI/Telegram), or as a
+Claude Code skill. **Finance is the first category** (`automations/finance/…`) —
+the platform is general; new domains are new folders under `automations/<domain>/`.
+Full design in [PRD.md](PRD.md).
 
 ## CLI (`cli/auto`)
 
@@ -30,9 +30,11 @@ python cli/auto deploy <id>             # (advanced) just generate the launchd/A
 - **`cli/auto`** — front door. Loads manifests, resolves declared secrets (one
   Keychain touch in the parent), injects them as env into the child, runs the
   entry, wraps in structured logging. Also manages launchd services.
-- **`automations/<id>/automation.yaml`** — manifest: `id, category, description,
-  runtime, entry, triggers[], schedule, tz, secrets[] (names only), allowed_tools[],
-  deploy.target`. Add an automation = new folder + manifest + entry; no central wiring.
+- **`automations/<category>/<id>/automation.yaml`** — manifest: `id, category,
+  description, runtime, entry, triggers[], schedule, tz, secrets[] (names only),
+  allowed_tools[], deploy.target`. `category` defaults to the parent folder name.
+  Discovery is recursive (`rglob`), so depth is flexible. Add an automation = new
+  folder + manifest + entry; no central wiring.
 - **`lib/py/`** — the only cross-cutting code: `config`, `secrets_store`
   (Keychain/env), `scrub`, `runlog`, `notify` (Telegram), `manifest`, `deploy`
   (launchd plists / Actions yaml), `service` (launchctl wrappers), `skillgen`.
@@ -54,10 +56,12 @@ python cli/auto deploy <id>             # (advanced) just generate the launchd/A
 
 ## Categories
 
-`category:` groups automations (default `general`). All current ones are
-`finance`. Adding a new domain (e.g. `productivity`, `home`): create
-`automations/<id>/` with `category: <domain>` — `list/status/start` group and
-target by it automatically. No code changes needed.
+`category:` groups automations (default = parent folder name). All current ones
+are `finance` (under `automations/finance/`). Adding a new domain (e.g.
+`productivity`, `home`): create `automations/<domain>/<id>/` — `list/status/
+start/stop/restart/update` group and target by it automatically (`auto start
+<domain>`). Telegram commands are namespaced per domain too (see below). No code
+changes needed for a new automation in an existing pattern.
 
 ## Conventions
 
@@ -115,9 +119,13 @@ tree (gitignored `data/`).
 
 ## Telegram bot
 
-Always-on service. Chat-id whitelisted (ignores everyone else). Commands:
-`/analyze`, `/finance <question>` (NL Q&A), `/sync`, `/categorize`, `/weekly`,
-`/status`, `/help`. Logs to `logs/telegram-bot.service.out` (unbuffered).
+Always-on service (`automations/finance/telegram-bot`). Chat-id whitelisted
+(ignores everyone else). **Namespaced commands** so it scales beyond finance:
+- Global: `/status`, `/help`, `/run <automation-id>` (run any automation).
+- Finance namespace: `/finance <question>` (NL Q&A) and
+  `/finance sync|analyze|categorize|weekly`.
+- A new domain adds its own `/<domain>` root in `GLOBAL` + a handler branch.
+Logs to `logs/telegram-bot.service.out` (unbuffered).
 
 ## launchd notes
 

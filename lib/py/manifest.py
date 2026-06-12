@@ -1,7 +1,7 @@
 """Load and validate automation.yaml manifests."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -51,6 +51,9 @@ def _require(data: dict, key: str, path: Path):
 def load(manifest_path: Path) -> Manifest:
     data = yaml.safe_load(manifest_path.read_text()) or {}
     d = manifest_path.parent
+    # Category: explicit field wins; else infer from the parent folder when the
+    # automation lives under automations/<category>/<id>/.
+    inferred = d.parent.name if d.parent.name != "automations" else "general"
 
     runtime = _require(data, "runtime", manifest_path)
     if runtime not in VALID_RUNTIMES:
@@ -78,7 +81,7 @@ def load(manifest_path: Path) -> Manifest:
     return Manifest(
         id=_require(data, "id", manifest_path),
         description=data.get("description", ""),
-        category=data.get("category", "general"),
+        category=data.get("category") or inferred,
         runtime=runtime,
         entry=_require(data, "entry", manifest_path),
         triggers=triggers,
@@ -92,11 +95,12 @@ def load(manifest_path: Path) -> Manifest:
 
 
 def discover() -> list[Manifest]:
-    """Load every automations/*/automation.yaml (sorted by id)."""
-    out = []
-    for path in sorted(config.AUTOMATIONS_DIR.glob("*/automation.yaml")):
-        out.append(load(path))
-    return sorted(out, key=lambda m: m.id)
+    """Load every automation manifest at any depth under automations/.
+
+    Supports both automations/<id>/ and automations/<category>/<id>/.
+    """
+    out = [load(p) for p in sorted(config.AUTOMATIONS_DIR.rglob("automation.yaml"))]
+    return sorted(out, key=lambda m: (m.category, m.id))
 
 
 def get(automation_id: str) -> Manifest:
