@@ -81,6 +81,12 @@ def launchd_plist(m) -> tuple[str, str, Path]:
         "WorkingDirectory": str(config.REPO_ROOT),
         "StandardOutPath": str(config.LOGS_DIR / f"{m.id}.{trigger}.out"),
         "StandardErrorPath": str(config.LOGS_DIR / f"{m.id}.{trigger}.err"),
+        "EnvironmentVariables": {
+            "PYTHONUNBUFFERED": "1",   # flush logs immediately
+            # include ~/.local/bin so `claude` is found for /finance + /analyze
+            "PATH": f"{Path.home() / '.local' / 'bin'}:/opt/homebrew/bin:/usr/local/bin:"
+                    f"{Path(sys.executable).parent}:/usr/bin:/bin:/usr/sbin:/sbin",
+        },
     }
     if is_service:
         plist["RunAtLoad"] = True

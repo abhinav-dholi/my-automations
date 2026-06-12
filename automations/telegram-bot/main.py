@@ -137,12 +137,19 @@ def main() -> None:
             offset = upd["update_id"] + 1
             msg = upd.get("message") or upd.get("edited_message") or {}
             from_chat = str((msg.get("chat") or {}).get("id", ""))
-            if from_chat != chat_id:        # security: ignore everyone else
-                continue
             text = msg.get("text", "")
+            print(f"[telegram-bot] update {upd['update_id']} chat={from_chat} text={text!r}", flush=True)
+            if from_chat != chat_id:        # security: ignore everyone else
+                print(f"[telegram-bot] ignored (chat {from_chat} != {chat_id})", flush=True)
+                continue
             cmd = parse_command(text)
             if cmd:
-                handle(token, chat_id, cmd, text)
+                print(f"[telegram-bot] handling {cmd}", flush=True)
+                try:
+                    handle(token, chat_id, cmd, text)
+                except Exception as e:
+                    print(f"[telegram-bot] handler error: {e}", flush=True)
+                    _send(token, chat_id, f"⚠️ error handling {cmd}: {e}")
             else:
                 _send(token, chat_id, "Unknown command. /help")
 

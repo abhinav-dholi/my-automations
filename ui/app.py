@@ -131,11 +131,11 @@ def page_overview():
     left, right = st.columns([3, 2])
     with left:
         st.subheader("Net worth trend")
-        bs = pd.DataFrame(db["bal_series"]).rename(columns={"total": "cash+accounts"})
-        hs = pd.DataFrame(db["hold_series"]).rename(columns={"total": "investments"})
+        # Net worth = sum of all account balances (investment balances already
+        # include holdings — adding holdings again would double-count).
+        bs = pd.DataFrame(db["bal_series"]).rename(columns={"total": "net worth"})
         if not bs.empty:
-            m = bs.merge(hs, on="as_of", how="outer").fillna(0).sort_values("as_of")
-            m["net worth"] = m["cash+accounts"] + m["investments"]
+            m = bs.sort_values("as_of").copy()
             m["t"] = pd.to_datetime(m["as_of"], errors="coerce")
             fig = px.area(m, x="t", y="net worth", template=PLOT_TEMPLATE,
                           color_discrete_sequence=[ACCENT])
@@ -265,6 +265,15 @@ def page_investments():
     if h.empty:
         st.info("No holdings synced. (SimpleFIN exposes these for investment accounts.)"); return
 
+    # Only count holdings in funded investment accounts (balance > 0). Excludes
+    # unvested / $0-balance accounts (e.g. equity awards) that overstate value.
+    bal = pd.DataFrame(db["balances"])
+    funded = set(bal[(bal["type"] == "investment") & (bal["balance"] > 0)]["id"]) if not bal.empty else set()
+    excluded = h[~h["account_id"].isin(funded)]
+    h = h[h["account_id"].isin(funded)]
+    if h.empty:
+        st.info("No funded investment holdings. (Unvested/equity-award holdings are excluded.)"); return
+
     total_val = h["market_value"].sum()
     total_cost = h["cost_basis"].sum()
     gain = total_val - total_cost
@@ -288,7 +297,10 @@ def page_investments():
             h2[["symbol", "quantity", "market_value", "cost_basis", "gain %"]],
             use_container_width=True, hide_index=True,
         )
-    st.caption("Diversification note: concentration in a single holding is a key risk the analysis flags.")
+    if not excluded.empty:
+        st.caption(f"Excluded {len(excluded)} unvested/$0-balance holding(s) "
+                   f"(${excluded['market_value'].sum():,.0f}) from invested totals.")
+    st.caption("Concentration in a single holding is a key risk the analysis flags.")
 
 
 def page_splitwise():

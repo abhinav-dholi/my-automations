@@ -276,9 +276,21 @@ def transactions_since(conn, since_unix: int) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def transactions_between(conn, start_unix: int, end_unix: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        """SELECT t.*, COALESCE(l.category,'Uncategorized') AS category
+           FROM transactions t
+           LEFT JOIN transaction_labels l
+             ON l.txn_id=t.id AND l.label_source='rule'
+           WHERE t.posted >= ? AND t.posted <= ?
+           ORDER BY t.posted DESC""",
+        (start_unix, end_unix),
+    ).fetchall()
+
+
 def latest_balances(conn) -> list[sqlite3.Row]:
     return conn.execute(
-        """SELECT a.name, a.type, b.balance, b.as_of FROM accounts a
+        """SELECT a.id, a.name, a.type, b.balance, b.as_of FROM accounts a
            JOIN balances b ON b.account_id=a.id
            WHERE b.as_of = (SELECT MAX(as_of) FROM balances WHERE account_id=a.id)
            ORDER BY a.name""",

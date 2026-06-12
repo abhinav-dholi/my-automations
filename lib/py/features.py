@@ -57,19 +57,27 @@ def build(profile: dict | None = None, lookback_days: int = 90) -> dict:
     liquid = sum(b["balance"] for b in balances if b["type"] in LIQUID_TYPES)
     emergency_months = round(liquid / monthly_spend, 1) if monthly_spend else None
 
-    invest_total = sum(h["market_value"] for h in holdings) or 0.0
+    # Net worth = sum of all account balances. An investment account's balance
+    # already reflects its holdings, so do NOT add holdings again (avoids the
+    # double-count). Investable portfolio = funded investment-account balances.
+    net_worth = round(sum(b["balance"] for b in balances), 2)
+    invest_total = round(sum(b["balance"] for b in balances if b["type"] == "investment"), 2)
+
+    # Allocation: only holdings in funded accounts (balance > 0) — excludes
+    # unvested/$0-balance accounts (e.g. equity awards) that would overstate.
+    funded = {b["id"] for b in balances if b["type"] == "investment" and b["balance"] > 0}
+    funded_holdings = [h for h in holdings if h["account_id"] in funded]
+    hv = sum(h["market_value"] for h in funded_holdings) or 0.0
     allocation = [
         {
             "symbol": h["symbol"],
-            "pct_of_portfolio": round(h["market_value"] / invest_total, 3) if invest_total else 0.0,
+            "pct_of_portfolio": round(h["market_value"] / hv, 3) if hv else 0.0,
             "gain_pct": round((h["market_value"] - h["cost_basis"]) / h["cost_basis"], 3)
             if h["cost_basis"] else None,
         }
-        for h in holdings
+        for h in funded_holdings
     ]
     top_concentration = max((a["pct_of_portfolio"] for a in allocation), default=0.0)
-
-    net_worth = round(sum(b["balance"] for b in balances) + invest_total, 2)
 
     return {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
