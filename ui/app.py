@@ -125,14 +125,20 @@ def page_overview():
     db = load_finance_db()
     cf, res, port = f["cashflow"], f["resilience"], f["portfolio"]
 
+    n_mo = f.get("months_analyzed", 0)
     c = st.columns(6)
     c[0].metric("Net worth", _money(f["net_worth"]))
-    c[1].metric("Monthly income", _money(cf["monthly_income"]))
-    c[2].metric("Monthly spend", _money(cf["monthly_spend"]))
+    c[1].metric("Monthly income", _money(cf["monthly_income"]),
+                help=f"Median of {n_mo} complete month(s) — the typical month.")
+    c[2].metric("Monthly spend", _money(cf["monthly_spend"]),
+                help=f"Median over {n_mo} complete month(s); ignores one-off spikes. "
+                     f"Mean is {_money(cf.get('avg_monthly_spend'))}.")
     c[3].metric("Savings rate", f"{cf['savings_rate']*100:.0f}%")
     c[4].metric("Investable / mo", _money(cf["monthly_investable_estimate"]))
     em = res.get("emergency_fund_months")
     c[5].metric("Emergency fund", f"{em:.1f} mo" if em is not None else "—")
+    if n_mo < 2:
+        st.caption("⚠️ Less than 2 complete months of history yet — averages firm up as more data accrues.")
 
     left, right = st.columns([3, 2])
     with left:
@@ -163,17 +169,23 @@ def page_overview():
         if vals:
             st.plotly_chart(donut(labels, vals), use_container_width=True)
 
-    st.subheader("Income vs spend (monthly)")
-    bar = go.Figure([
-        go.Bar(name="Income", x=["monthly"], y=[cf["monthly_income"]], marker_color="#22c55e"),
-        go.Bar(name="Spend", x=["monthly"], y=[cf["monthly_spend"]], marker_color="#ef4444"),
-        go.Bar(name="Investable", x=["monthly"], y=[cf["monthly_investable_estimate"]], marker_color=ACCENT),
-    ])
-    bar.update_layout(template=PLOT_TEMPLATE, barmode="group", height=280,
-                      margin=dict(t=20, b=10, l=10, r=10))
-    st.plotly_chart(bar, use_container_width=True)
-    st.caption(f"Spend excludes {_money(cf.get('excluded_movement_total',0))} of "
-               "transfers / card payments / investment moves.")
+    st.subheader("Income vs spend by month")
+    series = f.get("monthly_series", {})
+    if series:
+        sdf = pd.DataFrame([
+            {"month": m, "Income": v["income"], "Spend": v["spend"]}
+            for m, v in sorted(series.items())
+        ])
+        bar = go.Figure([
+            go.Bar(name="Income", x=sdf["month"], y=sdf["Income"], marker_color="#22c55e"),
+            go.Bar(name="Spend", x=sdf["month"], y=sdf["Spend"], marker_color="#ef4444"),
+        ])
+        bar.update_layout(template=PLOT_TEMPLATE, barmode="group", height=300,
+                          margin=dict(t=20, b=10, l=10, r=10), xaxis_title=None, yaxis_title=None)
+        st.plotly_chart(bar, use_container_width=True)
+    st.caption(f"Headline figures are the **median** of complete months (current + any partial "
+               f"start month excluded). Spend also excludes {_money(cf.get('excluded_movement_total',0))} "
+               "of transfers / card payments / investment moves.")
 
 
 def page_spending():

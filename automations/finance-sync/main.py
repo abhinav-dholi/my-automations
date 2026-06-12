@@ -16,8 +16,10 @@ import simplefin
 import store
 import transfers
 
-# SimpleFIN recommends <=45 days per request; idempotent upserts dedupe overlap.
-LOOKBACK_DAYS = 45
+# SimpleFIN caps each request at ~45 days, so backfill history in chunks to
+# build enough months for meaningful averages. Idempotent upserts dedupe overlap.
+CHUNK_DAYS = 45
+HISTORY_DAYS = 270   # ~9 months of history per sync
 
 CREDIT_HINTS = ["credit", "card", "visa", "mastercard", "amex", "freedom",
                 "sapphire", "quicksilver", "venture", "platinum", "rewards",
@@ -54,49 +56,55 @@ def infer_type(name: str, has_holdings: bool, balance: float, overrides: dict) -
 def main() -> None:
     access_url = secrets_store.get("SIMPLEFIN_ACCESS_URL")
     started = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-
-    end = int(time.time())
-    start = end - LOOKBACK_DAYS * 86400
-    accounts = simplefin.get_accounts(access_url, start, end)
+    now = int(time.time())
+    as_of = started
+    overrides = _overrides()
 
     store.init_db()
     n_new_txn = 0
-    as_of = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-    overrides = _overrides()
+    n_accounts = 0
 
     with store.connect() as conn:
         learned = store.learned_rules(conn)   # merchant key -> category (user-taught)
-        for acct in accounts:
-            store.upsert_account(
-                conn, id=acct.id, name=acct.name,
-                type=infer_type(acct.name, bool(acct.holdings), acct.balance, overrides),
-                institution="", currency=acct.currency, source="simplefin",
-            )
-            store.record_balance(
-                conn, account_id=acct.id, balance=acct.balance,
-                available=acct.balance, as_of=as_of,
-            )
-            for t in acct.transactions:
-                is_new = store.upsert_transaction(
-                    conn, id=t.id, account_id=acct.id, posted=t.posted,
-                    amount=t.amount, description=t.description,
-                    pending=t.pending, source="simplefin",
-                    raw={"description": t.description, "amount": t.amount},
-                )
-                if is_new:
-                    n_new_txn += 1
-                # (Re)apply rule label — learned merchant rules win over keywords.
-                cat = learned.get(store.merchant_key(t.description)) \
-                    or finance_rules.categorize(t.description, t.amount)
-                store.set_label(conn, txn_id=t.id, category=cat,
-                                label_source="rule", confidence=1.0)
-            for h in acct.holdings:
-                store.upsert_holding(
-                    conn, account_id=acct.id, symbol=h.symbol, name=h.name,
-                    quantity=h.quantity, cost_basis=h.cost_basis,
-                    market_value=h.market_value, asset_class="", as_of=as_of,
-                    source="simplefin",
-                )
+        # Walk back in CHUNK_DAYS windows. i==0 is the current snapshot and
+        # records accounts/balances/holdings; every window ingests transactions.
+        for i in range(0, HISTORY_DAYS, CHUNK_DAYS):
+            w_end = now - i * 86400
+            w_start = w_end - CHUNK_DAYS * 86400
+            accounts = simplefin.get_accounts(access_url, w_start, w_end)
+            if i == 0:
+                n_accounts = len(accounts)
+            for acct in accounts:
+                if i == 0:
+                    store.upsert_account(
+                        conn, id=acct.id, name=acct.name,
+                        type=infer_type(acct.name, bool(acct.holdings), acct.balance, overrides),
+                        institution="", currency=acct.currency, source="simplefin",
+                    )
+                    store.record_balance(
+                        conn, account_id=acct.id, balance=acct.balance,
+                        available=acct.balance, as_of=as_of,
+                    )
+                    for h in acct.holdings:
+                        store.upsert_holding(
+                            conn, account_id=acct.id, symbol=h.symbol, name=h.name,
+                            quantity=h.quantity, cost_basis=h.cost_basis,
+                            market_value=h.market_value, asset_class="", as_of=as_of,
+                            source="simplefin",
+                        )
+                for t in acct.transactions:
+                    is_new = store.upsert_transaction(
+                        conn, id=t.id, account_id=acct.id, posted=t.posted,
+                        amount=t.amount, description=t.description,
+                        pending=t.pending, source="simplefin",
+                        raw={"description": t.description, "amount": t.amount},
+                    )
+                    if is_new:
+                        n_new_txn += 1
+                    cat = learned.get(store.merchant_key(t.description)) \
+                        or finance_rules.categorize(t.description, t.amount)
+                    store.set_label(conn, txn_id=t.id, category=cat,
+                                    label_source="rule", confidence=1.0)
 
         # Detect internal transfers across accounts and relabel both legs as
         # Transfer (excluded from income/spend). Don't override manual labels.
@@ -116,11 +124,11 @@ def main() -> None:
 
         store.record_sync(
             conn, source="simplefin", started=started, status="ok",
-            n_accounts=len(accounts), n_transactions=n_new_txn,
-            note=f"lookback={LOOKBACK_DAYS}d transfers={n_transfers}",
+            n_accounts=n_accounts, n_transactions=n_new_txn,
+            note=f"history={HISTORY_DAYS}d transfers={n_transfers}",
         )
 
-    print(f"[finance-sync] {len(accounts)} accounts, {n_new_txn} new transactions, "
+    print(f"[finance-sync] {n_accounts} accounts, {n_new_txn} new transactions, "
           f"{n_transfers} transfer legs detected.")
 
 
