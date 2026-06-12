@@ -103,6 +103,11 @@ def _money(x) -> str:
         return "—"
 
 
+def _md(text) -> str:
+    """Escape $ so Streamlit markdown doesn't treat text as LaTeX math."""
+    return str(text or "").replace("$", "\\$")
+
+
 # --- shared chart helpers ----------------------------------------------
 
 def donut(labels, values, title=""):
@@ -400,7 +405,8 @@ def page_analysis():
         st.info("No analysis yet. Click Run, or trigger /analyze in Telegram."); return
 
     if a.get("summary"):
-        st.markdown(f"#### Summary\n{a['summary']}")
+        st.subheader("Summary")
+        st.markdown(_md(a["summary"]))
     if a.get("monthly_investable") is not None:
         st.metric("Estimated monthly investable", _money(a["monthly_investable"]))
 
@@ -419,9 +425,8 @@ def page_analysis():
     if a.get("actions"):
         st.subheader("Prioritized actions")
         for act in sorted(a["actions"], key=lambda x: x.get("priority", 99)):
-            st.markdown(f"**{act.get('priority','?')}. {act.get('action','')}**  \n"
-                        f"<span style='opacity:.7'>{act.get('rationale','')}</span>",
-                        unsafe_allow_html=True)
+            st.markdown(f"**{act.get('priority','?')}. {_md(act.get('action',''))}**")
+            st.caption(_md(act.get("rationale", "")))
 
 
 def page_automations():
