@@ -7,6 +7,7 @@ data/finance.db — gitignored, local-only, FileVault-encrypted at rest (§11.5)
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -99,6 +100,11 @@ CREATE TABLE IF NOT EXISTS splitwise_balances (
     amount REAL,            -- + == owed to me
     as_of TEXT,
     PRIMARY KEY (friend_id, currency, as_of)
+);
+CREATE TABLE IF NOT EXISTS learned_categories (
+    pattern TEXT PRIMARY KEY,   -- normalized merchant key
+    category TEXT,
+    created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS splitwise_expenses (
     id INTEGER PRIMARY KEY,
@@ -264,26 +270,67 @@ def splitwise_share_since(conn, since_iso: str) -> float:
     ).fetchone()
     return round(row["s"], 2)
 
+# Effective category: a manual override wins over the rule label.
+_CATEGORY_SELECT = """
+    SELECT t.*,
+           COALESCE(lm.category, lr.category, 'Uncategorized') AS category,
+           CASE WHEN lm.category IS NOT NULL THEN 'manual' ELSE 'rule' END AS label_source
+    FROM transactions t
+    LEFT JOIN transaction_labels lm ON lm.txn_id=t.id AND lm.label_source='manual'
+    LEFT JOIN transaction_labels lr ON lr.txn_id=t.id AND lr.label_source='rule'
+"""
+
+
 def transactions_since(conn, since_unix: int) -> list[sqlite3.Row]:
     return conn.execute(
-        """SELECT t.*, COALESCE(l.category,'Uncategorized') AS category
-           FROM transactions t
-           LEFT JOIN transaction_labels l
-             ON l.txn_id=t.id AND l.label_source='rule'
-           WHERE t.posted >= ?
-           ORDER BY t.posted DESC""",
+        _CATEGORY_SELECT + " WHERE t.posted >= ? ORDER BY t.posted DESC",
         (since_unix,),
     ).fetchall()
 
 
+def set_manual_category(conn, txn_id: str, category: str) -> None:
+    """Persist a user's category override (wins over rules, survives re-sync)."""
+    set_label(conn, txn_id=txn_id, category=category,
+              label_source="manual", confidence=1.0)
+
+
+def merchant_key(description: str) -> str:
+    """Normalized merchant signature: lowercase, letters only, first 2 tokens."""
+    toks = re.sub(r"[^a-z ]", " ", (description or "").lower()).split()
+    return " ".join(toks[:2])
+
+
+def learn_category(conn, description: str, category: str) -> int:
+    """Remember merchant→category and retroactively re-tag matching txns' rule
+    labels (manual labels are untouched). Returns how many txns were re-tagged.
+    Future syncs apply this automatically. Improves classification over time.
+    """
+    key = merchant_key(description)
+    if not key:
+        return 0
+    conn.execute(
+        """INSERT OR REPLACE INTO learned_categories (pattern,category,created_at)
+           VALUES (?,?,?)""",
+        (key, category, _now()),
+    )
+    # Re-tag existing transactions whose merchant key matches.
+    retagged = 0
+    for r in conn.execute("SELECT id, description FROM transactions").fetchall():
+        if merchant_key(r["description"]) == key:
+            set_label(conn, txn_id=r["id"], category=category,
+                      label_source="rule", confidence=0.9, model="learned")
+            retagged += 1
+    return retagged
+
+
+def learned_rules(conn) -> dict[str, str]:
+    return {r["pattern"]: r["category"]
+            for r in conn.execute("SELECT pattern, category FROM learned_categories")}
+
+
 def transactions_between(conn, start_unix: int, end_unix: int) -> list[sqlite3.Row]:
     return conn.execute(
-        """SELECT t.*, COALESCE(l.category,'Uncategorized') AS category
-           FROM transactions t
-           LEFT JOIN transaction_labels l
-             ON l.txn_id=t.id AND l.label_source='rule'
-           WHERE t.posted >= ? AND t.posted <= ?
-           ORDER BY t.posted DESC""",
+        _CATEGORY_SELECT + " WHERE t.posted >= ? AND t.posted <= ? ORDER BY t.posted DESC",
         (start_unix, end_unix),
     ).fetchall()
 

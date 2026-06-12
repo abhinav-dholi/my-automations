@@ -46,6 +46,12 @@ PLOT_TEMPLATE = "plotly_dark"
 ACCENT = "#3b82f6"
 PALETTE = px.colors.qualitative.Set2
 
+# Category choices for manual edits (rule categories + money-movement + misc).
+CATEGORIES = sorted(set(
+    [c for c, _ in finance_rules.CATEGORY_RULES]
+    + list(finance_rules.NON_SPEND) + ["Other", "Uncategorized"]
+))
+
 
 # --- data access (cached) ----------------------------------------------
 
@@ -212,14 +218,50 @@ def page_spending():
                       xaxis_title=None, yaxis_title=None)
     st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Transactions")
-    cats = sorted(spend["category"].unique())
-    pick = st.multiselect("Category", cats, default=cats)
-    view = spend[spend["category"].isin(pick)].sort_values("date", ascending=False)
-    st.dataframe(
-        view[["date", "description", "category", "spend"]].rename(columns={"spend": "amount"}),
-        use_container_width=True, hide_index=True,
+    st.subheader("Transactions — edit categories")
+    st.caption("Change a category and click Save. Manual edits override the rules "
+               "and are remembered across every re-sync.")
+    allt = pd.DataFrame(db["txns"]).copy()
+    allt["date"] = pd.to_datetime(allt["posted"], unit="s")
+    allt = allt.sort_values("date", ascending=False)
+
+    fc1, fc2 = st.columns([2, 3])
+    cats = sorted(allt["category"].unique())
+    pick = fc1.multiselect("Filter category", cats, default=cats)
+    q = fc2.text_input("Search description", "")
+    view = allt[allt["category"].isin(pick)]
+    if q:
+        view = view[view["description"].str.contains(q, case=False, na=False)]
+
+    editor_df = view[["id", "date", "description", "amount", "category"]].reset_index(drop=True)
+    edited = st.data_editor(
+        editor_df, hide_index=True, use_container_width=True, height=460,
+        key="txn_editor",
+        column_config={
+            "id": None,
+            "date": st.column_config.DatetimeColumn("Date", disabled=True, format="YYYY-MM-DD"),
+            "description": st.column_config.TextColumn("Description", disabled=True, width="large"),
+            "amount": st.column_config.NumberColumn("Amount", disabled=True, format="$%.2f"),
+            "category": st.column_config.SelectboxColumn("Category", options=CATEGORIES, required=True),
+        },
     )
+    if st.button("💾 Save category changes", type="primary"):
+        orig = dict(zip(editor_df["id"], editor_df["category"]))
+        new = dict(zip(edited["id"], edited["category"]))
+        changed = {i: c for i, c in new.items() if orig.get(i) != c}
+        if not changed:
+            st.info("No changes to save.")
+        else:
+            desc_by_id = dict(zip(view["id"], view["description"]))
+            retagged = 0
+            with store.connect() as conn:
+                for tid, cat in changed.items():
+                    store.set_manual_category(conn, tid, cat)        # this txn (wins always)
+                    retagged += store.learn_category(conn, desc_by_id.get(tid, ""), cat)  # learn + re-tag similar
+            st.success(f"Saved {len(changed)} edit(s); learned the merchant(s) and "
+                       f"re-tagged {retagged} matching transaction(s). Future syncs apply this automatically.")
+            st.cache_data.clear()
+            st.rerun()
 
 
 def page_accounts():

@@ -14,6 +14,7 @@ import finance_rules
 import secrets_store
 import simplefin
 import store
+import transfers
 
 # SimpleFIN recommends <=45 days per request; idempotent upserts dedupe overlap.
 LOOKBACK_DAYS = 45
@@ -64,6 +65,7 @@ def main() -> None:
     overrides = _overrides()
 
     with store.connect() as conn:
+        learned = store.learned_rules(conn)   # merchant key -> category (user-taught)
         for acct in accounts:
             store.upsert_account(
                 conn, id=acct.id, name=acct.name,
@@ -83,12 +85,11 @@ def main() -> None:
                 )
                 if is_new:
                     n_new_txn += 1
-                # (Re)apply rule label — cheap and idempotent.
-                store.set_label(
-                    conn, txn_id=t.id,
-                    category=finance_rules.categorize(t.description, t.amount),
-                    label_source="rule", confidence=1.0,
-                )
+                # (Re)apply rule label — learned merchant rules win over keywords.
+                cat = learned.get(store.merchant_key(t.description)) \
+                    or finance_rules.categorize(t.description, t.amount)
+                store.set_label(conn, txn_id=t.id, category=cat,
+                                label_source="rule", confidence=1.0)
             for h in acct.holdings:
                 store.upsert_holding(
                     conn, account_id=acct.id, symbol=h.symbol, name=h.name,
@@ -97,13 +98,30 @@ def main() -> None:
                     source="simplefin",
                 )
 
+        # Detect internal transfers across accounts and relabel both legs as
+        # Transfer (excluded from income/spend). Don't override manual labels.
+        all_txns = conn.execute(
+            "SELECT id, account_id, amount, posted FROM transactions"
+        ).fetchall()
+        manual = {r["txn_id"] for r in conn.execute(
+            "SELECT txn_id FROM transaction_labels WHERE label_source='manual'")}
+        transfer_ids = transfers.detect_internal_transfers(all_txns)
+        n_transfers = 0
+        for tid in transfer_ids:
+            if tid in manual:
+                continue
+            store.set_label(conn, txn_id=tid, category="Transfer",
+                            label_source="rule", confidence=1.0, model="transfer-match")
+            n_transfers += 1
+
         store.record_sync(
             conn, source="simplefin", started=started, status="ok",
             n_accounts=len(accounts), n_transactions=n_new_txn,
-            note=f"lookback={LOOKBACK_DAYS}d",
+            note=f"lookback={LOOKBACK_DAYS}d transfers={n_transfers}",
         )
 
-    print(f"[finance-sync] {len(accounts)} accounts, {n_new_txn} new transactions ingested.")
+    print(f"[finance-sync] {len(accounts)} accounts, {n_new_txn} new transactions, "
+          f"{n_transfers} transfer legs detected.")
 
 
 if __name__ == "__main__":
