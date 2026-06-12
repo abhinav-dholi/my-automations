@@ -18,10 +18,11 @@ import secrets_store
 
 # Commands are namespaced by domain so the bot scales beyond finance.
 # Global commands work across all domains; /finance is the finance namespace.
-GLOBAL = {"/help", "/start", "/status", "/run", "/finance"}
+GLOBAL = {"/help", "/start", "/status", "/list", "/run", "/finance"}
 
 # Finance subcommand -> automation id(s) to run in order.
 FINANCE_ACTIONS = {
+    "summary": ["finance-summary"],
     "sync": ["finance-sync", "splitwise-sync", "finance-categorize"],
     "analyze": ["finance-analyze"],
     "categorize": ["finance-categorize"],
@@ -31,7 +32,8 @@ FINANCE_ACTIONS = {
 HELP = (
     "Commands:\n"
     "/finance <question> — ask about your finances (plain English)\n"
-    "/finance sync|analyze|categorize|weekly — run a finance job\n"
+    "/finance summary|sync|analyze|categorize|weekly — run a finance job\n"
+    "/list — list all automations (ids by category)\n"
     "/run <automation-id> — run any automation by id\n"
     "/status — service + last-run status\n"
     "/help — this message\n"
@@ -40,6 +42,7 @@ HELP = (
 FINANCE_HELP = (
     "Finance:\n"
     "/finance <question> — natural-language Q&A\n"
+    "/finance summary — current status (net worth, accounts, Splitwise)\n"
     "/finance sync — pull bank + Splitwise + AI-categorize\n"
     "/finance analyze — full AI analysis report\n"
     "/finance categorize — AI-categorize new transactions\n"
@@ -87,6 +90,20 @@ def _status_text() -> str:
     )
 
 
+def _list_text() -> str:
+    sys.path.insert(0, str(config.LIB_PY))
+    import manifest
+    cats: dict[str, list[str]] = {}
+    for m in manifest.discover():
+        cats.setdefault(m.category, []).append(m.id)
+    out = ["Automations:"]
+    for cat, ids in sorted(cats.items()):
+        out.append(f"\n▸ {cat}")
+        out += [f"  {i}" for i in sorted(ids)]
+    out.append("\nRun any with /run <id>.")
+    return "\n".join(out)
+
+
 def _run(automation_id: str) -> tuple[bool, str]:
     res = subprocess.run(
         [sys.executable, "cli/auto", "run", automation_id],
@@ -115,6 +132,9 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
         return
     if cmd == "/status":
         _send(token, chat_id, _status_text())
+        return
+    if cmd == "/list":
+        _send(token, chat_id, _list_text())
         return
     if cmd == "/run":
         rest = _rest(text)

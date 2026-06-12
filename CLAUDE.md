@@ -119,11 +119,13 @@ tree (gitignored `data/`).
 
 ## Telegram bot
 
-Always-on service (`automations/finance/telegram-bot`). Chat-id whitelisted
+Always-on service at **`automations/system/telegram-bot`** (category `system` —
+it's a cross-domain dispatcher, not finance-specific). Chat-id whitelisted
 (ignores everyone else). **Namespaced commands** so it scales beyond finance:
-- Global: `/status`, `/help`, `/run <automation-id>` (run any automation).
+- Global: `/status`, `/list` (all automation ids by category),
+  `/run <automation-id>` (run any automation), `/help`.
 - Finance namespace: `/finance <question>` (NL Q&A) and
-  `/finance sync|analyze|categorize|weekly`.
+  `/finance summary|sync|analyze|categorize|weekly`.
 - A new domain adds its own `/<domain>` root in `GLOBAL` + a handler branch.
 Logs to `logs/telegram-bot.service.out` (unbuffered).
 

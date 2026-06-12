@@ -1,0 +1,16 @@
+id: finance-summary
+category: finance
+description: Point-in-time snapshot — net worth, account balances, portfolio, Splitwise, and typical monthly cashflow.
+runtime: python
+entry: main.py
+triggers:
+  - cli
+  - schedule
+  - skill
+schedule: "30 7 * * *"        # optional daily 07:30 snapshot (install via `auto start finance-summary`)
+tz: America/New_York
+secrets:
+  - TELEGRAM_TOKEN
+  - TELEGRAM_CHAT_ID
+deploy:
+  target: local-cron
