@@ -5,3 +5,4 @@ PyYAML==6.0.2
 # UI dashboard (auto ui)
 streamlit==1.40.0
 pandas==2.2.3
+plotly==5.24.1

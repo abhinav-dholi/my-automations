@@ -25,11 +25,15 @@ COMMANDS = {
 HELP = (
     "Commands:\n"
     "/analyze — run the finance analysis (sends a report here)\n"
+    "/finance <question> — ask anything about your finances in plain English\n"
     "/sync — pull latest bank + Splitwise data\n"
     "/weekly — weekly spend/balance digest\n"
     "/status — last run of each automation\n"
     "/help — this message"
 )
+
+# Commands that take a free-text question after the token.
+ASK_COMMANDS = {"/finance", "/ask"}
 
 
 def parse_command(text: str) -> str | None:
@@ -38,8 +42,14 @@ def parse_command(text: str) -> str | None:
         return None
     tok = text.strip().split()[0].lower()
     tok = tok.split("@")[0]  # strip /cmd@botname
-    known = set(COMMANDS) | {"/status", "/help", "/start"}
+    known = set(COMMANDS) | ASK_COMMANDS | {"/status", "/help", "/start"}
     return tok if tok in known else None
+
+
+def _question_after(text: str) -> str:
+    """Strip the leading command token, return the rest (the question)."""
+    parts = text.strip().split(maxsplit=1)
+    return parts[1].strip() if len(parts) > 1 else ""
 
 
 def _api(token: str, method: str, **params):
@@ -79,12 +89,22 @@ def _run(automation_id: str) -> tuple[bool, str]:
     return ok, (tail[-1] if tail else f"exit {res.returncode}")
 
 
-def handle(token: str, chat_id: str, cmd: str) -> None:
+def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
     if cmd in ("/help", "/start"):
         _send(token, chat_id, HELP)
         return
     if cmd == "/status":
         _send(token, chat_id, _status_text())
+        return
+    if cmd in ASK_COMMANDS:
+        question = _question_after(text)
+        if not question:
+            _send(token, chat_id, "Ask a question, e.g. /finance how much did I spend on dining?")
+            return
+        _send(token, chat_id, "💭 thinking…")
+        sys.path.insert(0, str(config.LIB_PY))
+        import finance_ask
+        _send(token, chat_id, finance_ask.answer(question))
         return
     for aid in COMMANDS[cmd]:
         _send(token, chat_id, f"▶ running {aid}…")
@@ -119,9 +139,10 @@ def main() -> None:
             from_chat = str((msg.get("chat") or {}).get("id", ""))
             if from_chat != chat_id:        # security: ignore everyone else
                 continue
-            cmd = parse_command(msg.get("text", ""))
+            text = msg.get("text", "")
+            cmd = parse_command(text)
             if cmd:
-                handle(token, chat_id, cmd)
+                handle(token, chat_id, cmd, text)
             else:
                 _send(token, chat_id, "Unknown command. /help")
 

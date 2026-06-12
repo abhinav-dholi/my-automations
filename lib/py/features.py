@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 
+import finance_rules
 import store
 
 LIQUID_TYPES = {"checking", "savings"}
@@ -35,14 +36,19 @@ def build(profile: dict | None = None, lookback_days: int = 90) -> dict:
     months = _months_span(txns)
 
     spend_by_cat: dict[str, float] = {}
-    total_spend = total_income = 0.0
+    total_spend = total_income = excluded_movement = 0.0
     for t in txns:
+        cat = t["category"]
         amt = t["amount"]
-        if amt < 0:
-            spend_by_cat[t["category"]] = spend_by_cat.get(t["category"], 0.0) + abs(amt)
+        if cat == "Income":
+            if amt > 0:
+                total_income += amt
+        elif cat in finance_rules.NON_SPEND:
+            # Transfers / card payments / investment moves — not consumption.
+            excluded_movement += abs(amt)
+        elif amt < 0:
+            spend_by_cat[cat] = spend_by_cat.get(cat, 0.0) + abs(amt)
             total_spend += abs(amt)
-        else:
-            total_income += amt
 
     monthly_income = round(total_income / months, 2)
     monthly_spend = round(total_spend / months, 2)
@@ -73,6 +79,8 @@ def build(profile: dict | None = None, lookback_days: int = 90) -> dict:
             "monthly_spend": monthly_spend,
             "savings_rate": savings_rate,
             "monthly_investable_estimate": round(monthly_income - monthly_spend, 2),
+            "excluded_movement_total": round(excluded_movement, 2),
+            "note": "spend excludes transfers, card payments, and investment moves",
         },
         "spend_by_category_monthly": {
             k: round(v / months, 2)

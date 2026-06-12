@@ -234,6 +234,28 @@ def splitwise_net(conn) -> dict[str, float]:
     return {r["currency"]: round(r["net"], 2) for r in rows}
 
 
+def balance_series(conn) -> list:
+    """Total of all account balances per sync timestamp (net worth ex-investments)."""
+    return conn.execute(
+        "SELECT as_of, SUM(balance) AS total FROM balances GROUP BY as_of ORDER BY as_of"
+    ).fetchall()
+
+
+def holdings_series(conn) -> list:
+    """Total holdings market value per sync timestamp."""
+    return conn.execute(
+        "SELECT as_of, SUM(market_value) AS total FROM holdings GROUP BY as_of ORDER BY as_of"
+    ).fetchall()
+
+
+def splitwise_balances_latest(conn) -> list:
+    return conn.execute(
+        """SELECT friend_name, currency, amount FROM splitwise_balances
+           WHERE as_of=(SELECT MAX(as_of) FROM splitwise_balances)
+           ORDER BY amount DESC"""
+    ).fetchall()
+
+
 def splitwise_share_since(conn, since_iso: str) -> float:
     """Sum of my owed share of expenses dated on/after since_iso (my real cost)."""
     row = conn.execute(

@@ -8,5 +8,6 @@ triggers:
 secrets:
   - TELEGRAM_TOKEN
   - TELEGRAM_CHAT_ID
+  - CLAUDE_CODE_OAUTH_TOKEN   # for /finance natural-language Q&A
 deploy:
   target: local-cron         # local daemon; finance stays on-box (§11.5)

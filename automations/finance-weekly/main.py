@@ -10,6 +10,7 @@ import json
 import time
 
 import config
+import finance_rules
 import notify
 import store
 
@@ -24,15 +25,17 @@ def build_summary(conn) -> dict:
     total_spend = 0.0
     total_income = 0.0
     for t in txns:
+        cat = t["category"]
         amount = t["amount"]
-        if amount < 0:
+        if cat == "Income":
+            if amount > 0:
+                total_income += amount
+        elif cat in finance_rules.NON_SPEND:
+            continue  # transfers / payments / investment moves are not spend
+        elif amount < 0:
             spend = abs(amount)
-            by_category[t["category"]] = round(
-                by_category.get(t["category"], 0.0) + spend, 2
-            )
+            by_category[cat] = round(by_category.get(cat, 0.0) + spend, 2)
             total_spend += spend
-        else:
-            total_income += amount
 
     balances = {row["name"]: round(row["balance"], 2)
                 for row in store.latest_balances(conn)}
