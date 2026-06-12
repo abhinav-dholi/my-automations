@@ -61,7 +61,14 @@ def format_text(s: dict) -> str:
     net = sum(s["splitwise_net"].values()) if s["splitwise_net"] else 0
     if s["splitwise"]:
         verb = "owed to you" if net >= 0 else "you owe"
-        lines += ["", f"🤝 Splitwise: ${abs(net):,.0f} {verb}"]
+        lines += ["", f"🤝 Splitwise: ${abs(net):,.0f} net {verb}"]
+        # Per-friend split: + = they owe you, - = you owe them.
+        for b in sorted(s["splitwise"], key=lambda x: -x["amount"]):
+            if round(b["amount"], 2) == 0:
+                continue
+            sign = "＋" if b["amount"] >= 0 else "−"
+            who = "owes you" if b["amount"] >= 0 else "you owe"
+            lines.append(f"   {sign}${abs(b['amount']):,.0f}  {b['friend_name'][:24]} ({who})")
 
     em = s["resilience"].get("emergency_fund_months")
     lines += [
