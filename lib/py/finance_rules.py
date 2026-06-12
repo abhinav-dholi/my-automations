@@ -9,11 +9,17 @@ consumption, and would otherwise massively inflate spend across accounts.
 """
 from __future__ import annotations
 
-# Money-movement / non-consumption — excluded from spend metrics.
-NON_SPEND = {"Income", "Transfer", "Payment", "Investment"}
+# Money-movement / inflows that are NOT consumption and NOT recurring income.
+# Excluded from spend; only the "Income" category counts toward income.
+NON_SPEND = {"Income", "Transfer", "Payment", "Investment", "Credit"}
 
 CATEGORY_RULES = [
-    # Money movement first (these must win over spend categories).
+    # Recurring income (payroll / stipend) — must be matched explicitly; a
+    # positive amount alone is NOT assumed to be income.
+    ("Income", ["payroll", "direct deposit", "dir dep", "dirdep", "salary",
+                "stipend", "meta platforms", "meta payroll", "gusto", "adp ",
+                "workday", "paychex", "paycheck"]),
+    # Money movement (these must win over spend categories).
     ("Payment", ["payment thank you", "autopay", "online payment", "auto pay",
                  "credit card payment", "card payment", "bill pay", "billpay",
                  "pymt", "e-payment", "epay", "ach pymt", "mobile payment"]),
@@ -49,6 +55,9 @@ def categorize(description: str, amount: float) -> str:
     for category, keywords in CATEGORY_RULES:
         if any(kw in desc for kw in keywords):
             return category
+    # Unmatched inflows are NOT assumed to be income — they're generic credits
+    # (refunds, reimbursements, external transfers). Mark the real stipend as
+    # Income in the dashboard and the classifier will learn it.
     if amount > 0:
-        return "Income"
+        return "Credit"
     return "Other"
