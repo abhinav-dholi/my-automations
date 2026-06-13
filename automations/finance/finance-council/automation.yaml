@@ -1,0 +1,14 @@
+id: finance-council
+category: finance
+description: Parallel 8-investor debate (detailed philosophies, cross-critique) + fiduciary mediator over your anonymized portfolio and the live market brief.
+runtime: python
+entry: main.py
+triggers:
+  - cli
+  - skill
+secrets:
+  - CLAUDE_CODE_OAUTH_TOKEN
+  - TELEGRAM_TOKEN
+  - TELEGRAM_CHAT_ID
+deploy:
+  target: local-cron

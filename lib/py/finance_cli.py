@@ -64,9 +64,9 @@ def cmd_store_insight(args) -> int:
             (args.agent, time.strftime("%Y-%m-%dT%H:%M:%S%z"),
              args.model, args.input_hash, json.dumps(data)),
         )
-    # Also drop a human-readable copy for the UI.
+    # Per-agent copy for the UI (e.g. finance-analyze.json, finance-council.json).
     config.ensure_runtime_dirs()
-    (config.DATA_DIR / "finance-analysis.json").write_text(json.dumps(data, indent=2))
+    (config.DATA_DIR / f"{args.agent}.json").write_text(json.dumps(data, indent=2))
     print("stored")
     return 0
 

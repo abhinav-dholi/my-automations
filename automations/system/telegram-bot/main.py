@@ -25,14 +25,16 @@ FINANCE_ACTIONS = {
     "summary": ["finance-summary"],
     "sync": ["finance-sync", "splitwise-sync", "finance-categorize"],
     "analyze": ["finance-analyze"],
+    "council": ["finance-council"],
     "categorize": ["finance-categorize"],
     "weekly": ["finance-weekly"],
+    "brief": ["market-watch"],
 }
 
 HELP = (
     "Commands:\n"
     "/finance <question> — ask about your finances (plain English)\n"
-    "/finance summary|sync|analyze|categorize|weekly — run a finance job\n"
+    "/finance summary|sync|analyze|council|weekly|brief — run a finance job\n"
     "/list — list all automations (ids by category)\n"
     "/run <automation-id> — run any automation by id\n"
     "/status — service + last-run status\n"
@@ -45,7 +47,10 @@ FINANCE_HELP = (
     "/finance summary — current status (net worth, accounts, Splitwise)\n"
     "/finance sync — pull bank + Splitwise + AI-categorize\n"
     "/finance analyze — full AI analysis report\n"
-    "/finance categorize — AI-categorize new transactions\n"
+    "/finance council — 8-investor panel debate → mediator advice\n"
+    "/finance expert <name> [question] — one investor's take (value, index, macro,\n"
+    "    growth, cycles, quant, tailrisk, disruptive)\n"
+    "/finance brief — refresh the market news brief\n"
     "/finance weekly — weekly spend/balance digest"
 )
 
@@ -152,6 +157,24 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
             _send(token, chat_id, FINANCE_HELP)
             return
         first = rest.split()[0].lower()
+        if first == "expert":
+            parts = rest.split(maxsplit=2)
+            if len(parts) < 2:
+                sys.path.insert(0, str(config.LIB_PY))
+                import council
+                _send(token, chat_id, "Usage: /finance expert <name> [question]\nNames: "
+                      + ", ".join(council.PERSONAS))
+                return
+            key = parts[1].lower()
+            q = parts[2] if len(parts) > 2 else None
+            _send(token, chat_id, f"🧠 consulting {key}…")
+            cmd_list = [sys.executable, "lib/py/council_cli.py", "expert", key]
+            if q:
+                cmd_list += ["--q", q]
+            res = subprocess.run(cmd_list, cwd=str(config.REPO_ROOT),
+                                 capture_output=True, text=True)
+            _send(token, chat_id, (res.stdout or res.stderr or "no output").strip()[:3500])
+            return
         if first in FINANCE_ACTIONS:
             for aid in FINANCE_ACTIONS[first]:
                 _run_and_report(token, chat_id, aid)

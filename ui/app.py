@@ -416,14 +416,14 @@ def page_splitwise():
 def page_analysis():
     st.title("AI Analysis")
     st.caption("Claude-orchestrated, over anonymized aggregates. Informational — not licensed financial advice.")
-    a = _load_json("finance-analysis.json")
+    a = _load_json("finance-analyze.json") or _load_json("finance-analysis.json")
     if st.button("▶ Run analysis now (~2 min)", type="primary"):
         with st.spinner("Claude analyzing…"):
             res = subprocess.run([sys.executable, "cli/auto", "run", "finance-analyze"],
                                  cwd=str(REPO_ROOT), capture_output=True, text=True)
         (st.success if res.returncode == 0 else st.error)(f"exited {res.returncode}")
         st.cache_data.clear()
-        a = _load_json("finance-analysis.json")
+        a = _load_json("finance-analyze.json")
 
     if not a:
         st.info("No analysis yet. Click Run, or trigger /analyze in Telegram."); return
