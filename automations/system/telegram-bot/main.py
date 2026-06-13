@@ -30,6 +30,14 @@ FINANCE_ACTIONS = {
     "weekly": ["finance-weekly"],
     "brief": ["market-watch"],
 }
+# Friendly progress labels + which actions deliver their own rich message.
+ACTION_LABELS = {
+    "summary": "📊 Building your snapshot", "sync": "🔄 Syncing accounts + Splitwise",
+    "analyze": "🧠 Running full analysis (~2 min)", "council": "🏛 Convening the council (~2–3 min)",
+    "categorize": "🏷 AI-categorizing transactions", "weekly": "📅 Building weekly digest",
+    "brief": "🌐 Refreshing market brief",
+}
+SELF_NOTIFY = {"finance-summary", "finance-weekly", "finance-analyze", "finance-council"}
 
 HELP = (
     "🤖 my-automations — your personal automation platform.\n"
@@ -115,11 +123,13 @@ def _status_text() -> str:
     for rec in runlog.read_recent(500):
         latest[rec["id"]] = rec
     if not latest:
-        return "No runs logged yet."
-    return "\n".join(
-        f"{i}: {r.get('status','?')} @ {r.get('end','?')}"
-        for i, r in sorted(latest.items())
-    )
+        return "No runs yet. Try /finance sync to get started."
+    icon = {"ok": "🟢", "error": "🔴"}
+    lines = ["📋 Last run of each automation:"]
+    for i, r in sorted(latest.items()):
+        when = (r.get("end", "") or "")[:16].replace("T", " ")
+        lines.append(f"{icon.get(r.get('status'), '⚪️')} {i} — {when}")
+    return "\n".join(lines)
 
 
 def _list_text() -> str:
@@ -203,8 +213,22 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
             _send(token, chat_id, (res.stdout or res.stderr or "no output").strip()[:3500])
             return
         if first in FINANCE_ACTIONS:
-            for aid in FINANCE_ACTIONS[first]:
-                _run_and_report(token, chat_id, aid)
+            ids = FINANCE_ACTIONS[first]
+            label = ACTION_LABELS.get(first, first)
+            _send(token, chat_id, f"{label}…")
+            all_ok, tails, self_notified = True, [], False
+            for aid in ids:
+                ok, msg = _run(aid)
+                all_ok = all_ok and ok
+                if aid in SELF_NOTIFY:
+                    self_notified = True
+                else:
+                    tails.append(f"  {'✓' if ok else '✗'} {msg}")
+            head = "✅ Done" if all_ok else "⚠️ Finished with errors"
+            extra = ("\n" + "\n".join(tails)) if tails else ""
+            if self_notified and not tails:
+                extra = " — full result sent above 👆"
+            _send(token, chat_id, f"{head}{extra}")
         else:                              # treat the whole thing as a question
             _send(token, chat_id, "💭 thinking…")
             sys.path.insert(0, str(config.LIB_PY))

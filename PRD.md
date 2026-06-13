@@ -398,3 +398,53 @@ personas simulate *frameworks*, not real-time opinions of living people.
 - Free API keys in Keychain: `FINNHUB_API_KEY`, `FRED_API_KEY`.
 - Cost: on-demand; a full 8-persona + critique + mediator run is the heaviest
   automation (~$0.50–$2/run depending on context). Kept on-demand by design.
+
+## 17. Historical context & learning loop — PLAN
+
+Goal: the system should remember and improve — each analysis/council run builds
+on prior runs and on how the portfolio + market evolved, and we track whether
+advice was acted on and how it played out.
+
+### 17.1 What we already persist (foundation — keep)
+- Time series: `market_prices`, `macro_series`, `balances`, `holdings` (per
+  `as_of`), `market_news` (timestamped).
+- `insights` — every finance-analyze / finance-council run as timestamped JSON.
+
+### 17.2 Gaps to close
+1. **Feature snapshots** — derived metrics aren't snapshotted, so trending recomputes
+   from raw and we can't cheaply diff "then vs now."
+2. **No continuity** — agents don't see the previous verdict or what changed, so each
+   run starts cold instead of "since last time, X moved, here's the update."
+3. **No follow-through tracking** — recommendations aren't tracked as
+   open/done/dismissed, and outcomes (did the flagged risk materialize?) aren't recorded.
+
+### 17.3 Plan
+- **`snapshots` table** — `(id, kind, as_of, data_json)`. On each council/analyze
+  run, snapshot the feature pack (net worth, allocation, cashflow, invested total,
+  key macro). Enables clean trend charts + fast deltas.
+- **`recommendations` table** — flatten each run's actions into rows
+  `(id, run_id, source, action, rationale, priority, confidence, created_at,
+  status[open|done|dismissed], resolved_at, note)`. User marks status in the UI /
+  Telegram; carried into the next run.
+- **Continuity injection** — a `_history()` context block fed to council/analyze:
+  prior verdict + summary, portfolio delta since last snapshot (net worth,
+  allocation drift, savings-rate change), notable market moves since, and the list
+  of still-open recommendations. Agents must explicitly note "what changed."
+- **Outcome review (later)** — a periodic pass that checks whether flagged risks
+  played out (e.g. did META dividend pay / dilution happen) and whether open
+  recommendations are now moot, surfacing a short "learning" note.
+
+### 17.4 Bias / informational stance (council refinement)
+- Individual personas stay opinionated (diversity = the value); the **mediator**
+  must be unbiased: present consensus, the genuine tradeoffs (both sides + what
+  would tip the call), conditions under which each camp is right, and what to
+  watch — then a balanced synthesis tied to the user's profile, explicitly framed
+  as one informed option, not dogma. Output gains `consensus`, `tradeoffs`,
+  `watch_items` alongside ranked actions.
+
+### 17.5 Phasing
+- **17a** `snapshots` table + capture on each run; `_history()` continuity block
+  into council + analyze; mediator made unbiased/informational. (build first)
+- **17b** `recommendations` table + status tracking (UI/Telegram mark done).
+- **17c** outcome-review pass + a History/Trends UI page (net worth, savings rate,
+  allocation drift, verdict-over-time).

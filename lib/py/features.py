@@ -7,11 +7,36 @@ Claude ever sees, so raw data never leaves the box.
 """
 from __future__ import annotations
 
+import re
 import statistics
 import time
 
 import finance_rules
 import store
+
+
+def _clean_acct(name: str) -> str:
+    # Drop trailing "(1234)" account-number fragments before anything leaves the box.
+    return re.sub(r"\s*\(\d+\)\s*$", "", name or "").strip()
+
+
+def _acct_role(name: str, type_: str) -> str:
+    n = (name or "").lower()
+    if any(k in n for k in ["401", "ira", "roth", "retirement", "403b"]):
+        return "retirement (tax-advantaged, illiquid until ~59.5)"
+    if "hsa" in n or "health savings" in n:
+        return "HSA (tax-advantaged; medical, or long-term if invested)"
+    if "equity award" in n or "rsu" in n or "espp" in n:
+        return "equity award / employer stock"
+    if type_ == "investment":
+        return "taxable brokerage"
+    if type_ in ("checking", "savings"):
+        return "cash"
+    if type_ == "credit":
+        return "credit card (debt)"
+    if type_ == "loan":
+        return "loan"
+    return type_
 
 LIQUID_TYPES = {"checking", "savings"}
 ANALYZE_DAYS = 400          # pull this much history for monthly aggregation
@@ -190,6 +215,11 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
             "target": alloc_target,
         },
         "net_worth": net_worth,
+        "accounts": [
+            {"name": _clean_acct(b["name"]), "type": b["type"],
+             "role": _acct_role(b["name"], b["type"]), "balance": round(b["balance"], 2)}
+            for b in balances
+        ],
         "splitwise": {
             # + == owed to you, - == you owe. Settle receivables before counting
             # as spendable; surfaced separately, NOT folded into liquid cash.

@@ -32,17 +32,21 @@ def _store(res: dict) -> None:
 
 
 def _notify_summary(res: dict) -> None:
-    lines = ["🏛 Investment Council", res.get("verdict") or res.get("summary", "")]
+    lines = ["🏛 Investment Council", res.get("summary", "")]
+    if res.get("whats_changed"):
+        lines.append(f"\n🔄 Since last time: {res['whats_changed']}")
     actions = res.get("actions", [])[:3]
     if actions:
-        lines.append("\nTop actions:")
+        lines.append("\nTop actions (balanced synthesis):")
         for a in actions:
+            sup = ",".join(a.get("supported_by", []) or [])
             lines.append(f"{a.get('priority','?')}. {a.get('action','')} "
-                         f"[{a.get('confidence','')}]")
-    debate = res.get("debate", [])
-    if debate:
-        lines.append(f"\n⚔️ Debate: {debate[0].get('issue','')}")
-    lines.append("\nInformational, not licensed financial advice.")
+                         f"[{a.get('confidence','')}{'; backs: '+sup if sup else ''}]")
+    tradeoffs = res.get("tradeoffs", [])
+    if tradeoffs:
+        lines.append(f"\n⚖️ Key tradeoff: {tradeoffs[0].get('issue','')}")
+    lines.append("\nBalanced & informational — not licensed financial advice. "
+                 "Full detail: dashboard Council page.")
     notify_mod.send("\n".join(lines))
 
 

@@ -453,6 +453,122 @@ def page_analysis():
             st.caption(_md(act.get("rationale", "")))
 
 
+def _run_cli(args: list[str], spinner: str) -> str:
+    with st.spinner(spinner):
+        res = subprocess.run([sys.executable] + args, cwd=str(REPO_ROOT),
+                             capture_output=True, text=True)
+    return (res.stdout or res.stderr or "").strip()
+
+
+def page_market():
+    st.title("Market")
+    if st.button("🔄 Refresh news + prices"):
+        _run_cli(["cli/auto", "run", "market-watch"], "Scouting the web…")
+        _run_cli(["cli/auto", "run", "market-data-sync"], "Fetching prices + macro…")
+        st.cache_data.clear(); st.rerun()
+    brief = _load_json("market-brief.json")
+    if not brief:
+        st.info("No market brief yet. Run `market-watch` / `market-data-sync`."); return
+
+    macro = brief.get("macro", {})
+    if macro:
+        cols = st.columns(len(macro))
+        for col, (k, v) in zip(cols, macro.items()):
+            col.metric(v.get("label", k), f"{v.get('value')}")
+
+    prices = brief.get("prices", {})
+    if prices:
+        st.subheader("Prices")
+        st.dataframe([{"symbol": k, "price": v} for k, v in sorted(prices.items())],
+                     hide_index=True, use_container_width=True)
+
+    news = brief.get("news", [])
+    st.subheader(f"Market news ({len(news)})")
+    for n in news:
+        url = n.get("url", "")
+        link = f" · [source]({url})" if url else ""
+        st.markdown(f"**{_md(n.get('headline',''))}**  \n{_md(n.get('summary',''))}  \n"
+                    f"<span style='opacity:.6'>{_md(n.get('source',''))}{link} · "
+                    f"{_md(n.get('relevance',''))}</span>", unsafe_allow_html=True)
+    st.caption(f"Brief generated {brief.get('generated_at','')}")
+
+
+def page_council():
+    st.title("Investment Council")
+    st.caption("Eight investing philosophies debate your portfolio over live market data; "
+               "a fiduciary mediator synthesizes a balanced, informational view — not biased "
+               "to any one school. Not licensed financial advice.")
+
+    c1, c2 = st.columns([1, 2])
+    if c1.button("▶ Run council (~2–3 min)", type="primary"):
+        out = _run_cli(["cli/auto", "run", "finance-council"], "Convening the council…")
+        st.cache_data.clear(); st.success(out[-150:] or "done"); st.rerun()
+
+    with st.expander("🧠 Ask a single expert"):
+        sys.path.insert(0, str(config.LIB_PY))
+        import council as _council
+        names = {k: v["name"] for k, v in _council.PERSONAS.items()}
+        key = st.selectbox("Expert", list(names), format_func=lambda k: names[k])
+        q = st.text_input("Question (optional)")
+        if st.button("Ask"):
+            args = ["lib/py/council_cli.py", "expert", key] + (["--q", q] if q else [])
+            st.markdown(_md(_run_cli(args, f"Consulting {names[key]}…")))
+
+    c = _load_json("finance-council.json")
+    if not c:
+        st.info("No council run yet. Click Run, or /finance council in Telegram."); return
+
+    if c.get("summary"):
+        st.subheader("Mediator synthesis")
+        st.markdown(_md(c["summary"]))
+    if c.get("whats_changed"):
+        st.info("🔄 Since last council: " + _md(c["whats_changed"]))
+
+    if c.get("consensus"):
+        st.subheader("Where the panel agrees")
+        for x in c["consensus"]:
+            st.markdown(f"- {_md(x)}")
+
+    if c.get("actions"):
+        st.subheader("Prioritized actions (balanced)")
+        for a in sorted(c["actions"], key=lambda x: x.get("priority", 99)):
+            sup = ", ".join(a.get("supported_by", []) or [])
+            opp = ", ".join(a.get("opposed_by", []) or [])
+            st.markdown(f"**{a.get('priority','?')}. {_md(a.get('action',''))}**  "
+                        f"·  _{a.get('confidence','')}_")
+            st.caption(_md(a.get("rationale", "")) +
+                       (f"  \n👍 {sup}" if sup else "") + (f"   👎 {opp}" if opp else ""))
+
+    if c.get("tradeoffs"):
+        st.subheader("Key tradeoffs (both sides)")
+        for t in c["tradeoffs"]:
+            with st.expander(_md(t.get("issue", ""))):
+                st.markdown(f"**One side:** {_md(t.get('one_side',''))}")
+                st.markdown(f"**Other side:** {_md(t.get('other_side',''))}")
+                if t.get("what_would_tip_it"):
+                    st.markdown(f"**What would tip it:** {_md(t['what_would_tip_it'])}")
+                if t.get("your_context"):
+                    st.caption("Your context: " + _md(t["your_context"]))
+
+    if c.get("watch_items"):
+        st.subheader("Watch")
+        for w in c["watch_items"]:
+            st.markdown(f"- {_md(w)}")
+
+    st.subheader("The panel")
+    for p in c.get("personas", []):
+        with st.expander(f"{p.get('name','')} — {(_md(p.get('stance','')) or '')[:70]}"):
+            if p.get("recommendation"):
+                st.markdown("**Recommendation:** " + _md(p["recommendation"]))
+            if p.get("pros"):
+                st.markdown("**Pros:** " + "; ".join(_md(x) for x in p["pros"]))
+            if p.get("cons"):
+                st.markdown("**Cons:** " + "; ".join(_md(x) for x in p["cons"]))
+            for dd in p.get("disagreements", []):
+                st.markdown(f"- ⚔️ vs {_md(dd.get('with',''))}: {_md(dd.get('point',''))}")
+    st.caption(c.get("disclaimer", ""))
+
+
 def page_automations():
     st.title("Automations")
     manifests = manifest_mod.discover()
@@ -526,7 +642,9 @@ def _build_nav():
         st.Page(page_accounts, title="Accounts", icon="🏦"),
         st.Page(page_investments, title="Investments", icon="📈"),
         st.Page(page_splitwise, title="Splitwise", icon="🤝"),
+        st.Page(page_market, title="Market", icon="🌐"),
         st.Page(page_analysis, title="AI Analysis", icon="🧠"),
+        st.Page(page_council, title="Council", icon="🏛"),
     ],
     "System": [
         st.Page(page_automations, title="Automations", icon="⚙️"),

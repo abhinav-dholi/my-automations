@@ -102,6 +102,12 @@ CREATE TABLE IF NOT EXISTS sync_runs (
     n_transactions INTEGER,
     note TEXT
 );
+CREATE TABLE IF NOT EXISTS snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT,
+    as_of TEXT,
+    data_json TEXT
+);
 CREATE TABLE IF NOT EXISTS insights (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent TEXT,
@@ -296,6 +302,32 @@ def recent_news(conn, limit: int = 20) -> list:
     return conn.execute(
         "SELECT * FROM market_news ORDER BY id DESC LIMIT ?", (limit,),
     ).fetchall()
+
+
+def record_snapshot(conn, *, kind, data) -> None:
+    conn.execute("INSERT INTO snapshots (kind,as_of,data_json) VALUES (?,?,?)",
+                 (kind, _now(), json.dumps(data, default=str)))
+
+
+def latest_snapshot(conn, kind: str) -> dict | None:
+    row = conn.execute(
+        "SELECT as_of, data_json FROM snapshots WHERE kind=? ORDER BY id DESC LIMIT 1",
+        (kind,),
+    ).fetchone()
+    if not row:
+        return None
+    d = json.loads(row["data_json"]); d["_as_of"] = row["as_of"]
+    return d
+
+
+def last_insight(conn, agent: str) -> dict | None:
+    row = conn.execute(
+        "SELECT generated_at, output_json FROM insights WHERE agent=? ORDER BY id DESC LIMIT 1",
+        (agent,),
+    ).fetchone()
+    if not row:
+        return None
+    return {"generated_at": row["generated_at"], "output": json.loads(row["output_json"])}
 
 
 def splitwise_net(conn) -> dict[str, float]:
