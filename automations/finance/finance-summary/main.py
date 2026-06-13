@@ -25,6 +25,7 @@ def build() -> dict:
     return {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "net_worth": f["net_worth"],
+        "investable_surplus": f.get("investable_surplus", 0),
         "cashflow": f["cashflow"],
         "resilience": f["resilience"],
         "portfolio": f["portfolio"],
@@ -84,7 +85,10 @@ def format_text(s: dict) -> str:
         f"💰 Saving ~${cf.get('monthly_to_savings',0):,.0f}/mo to savings = {sr:.0f}% rate",
     ]
     if em is not None:
-        lines.append(f"🛟 Emergency fund: {em:.1f} months")
+        ess = s["resilience"].get("essential_monthly", 0)
+        surplus = s.get("investable_surplus", 0)
+        lines.append(f"🛟 Emergency fund: {em:.1f} mo of essentials (~${ess:,.0f}/mo)")
+        lines.append(f"💸 Investable surplus (beyond reserve): ${surplus:,.0f}")
     return "\n".join(lines)
 
 

@@ -156,14 +156,16 @@ def page_overview():
     surplus = f.get("investable_surplus", 0)
     em = res.get("emergency_fund_months")
     tgt = res.get("emergency_fund_target_months", 6)
+    ess = res.get("essential_monthly", 0)
     if surplus > 0:
-        st.success(f"✅ Investable surplus: **{_money(surplus)}** — cash beyond your "
-                   f"{tgt:.0f}-month emergency reserve, free to deploy.")
+        st.success(f"✅ **Investable surplus: {_money(surplus)}** — liquid cash beyond a "
+                   f"{tgt:.0f}-month emergency reserve (you have {em} mo of essentials covered). "
+                   f"Reserve sizes essentials only (~{_money(ess)}/mo: rent/utilities/groceries/"
+                   "transport/health), not discretionary or one-off moving costs.")
     else:
         gap = max(0, (res.get("emergency_fund_target", 0) - nb["liquid_cash"]))
-        st.warning(f"🪙 Investable surplus: **$0** — your liquid cash is still building the "
-                   f"{tgt:.0f}-month emergency reserve ({em} of {tgt:.0f} months; ~{_money(gap)} to go). "
-                   "Finish the reserve before deploying cash into investments.")
+        st.warning(f"🪙 **Investable surplus: $0** — still building the {tgt:.0f}-month essentials "
+                   f"reserve ({em} of {tgt:.0f} mo; ~{_money(gap)} to go). Finish it before investing cash.")
 
     # ── Monthly money flow (reconciled) ──
     st.divider()
@@ -177,7 +179,7 @@ def page_overview():
     m4.metric("Savings rate", f"{cf['savings_rate']*100:.0f}%", help="Saved ÷ (saved + spent). After-tax; 401(k) not modeled.")
     st.caption(f"Of every dollar you deploy, **{cf['savings_rate']*100:.0f}% is saved**. Salary is "
                f"{cf.get('pay_cadence','')}; ~{_money(cf['est_other_income'])}/mo is non-salary income (RSU/bonus). "
-               f"Emergency fund: **{res.get('emergency_fund_months','—')} months** of spend in liquid cash."
+               f"Emergency fund: **{res.get('emergency_fund_months','—')} months of essentials** covered."
                + ("  ⚠️ only %d complete month(s) of history — firms up over time." % n_mo if n_mo < 2 else ""))
 
     # ── Net worth composition + allocation vs target ──
