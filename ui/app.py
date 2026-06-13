@@ -134,16 +134,19 @@ def page_overview():
     c = st.columns(6)
     c[0].metric("Net worth", _money(f["net_worth"]))
     c[1].metric("Monthly income", _money(cf["monthly_income"]),
-                help=f"Median of {n_mo} complete month(s) — the typical month.")
+                help=f"Run-rate over {n_mo} complete month(s). Pay cadence: {cf.get('pay_cadence','?')}.")
     c[2].metric("Monthly spend", _money(cf["monthly_spend"]),
-                help=f"Median over {n_mo} complete month(s); ignores one-off spikes. "
-                     f"Mean is {_money(cf.get('avg_monthly_spend'))}.")
-    c[3].metric("Savings rate", f"{cf['savings_rate']*100:.0f}%")
+                help=f"Run-rate over {n_mo} month(s); typical month "
+                     f"{_money(cf.get('typical_month_spend'))} (median, ignores spikes).")
+    c[3].metric("Savings rate", f"{cf['savings_rate']*100:.0f}%",
+                help="Timing-neutral (total income vs spend over the window). EXCLUDES "
+                     "pre-tax 401(k) + transfers to savings — your true rate is higher.")
     c[4].metric("Investable / mo", _money(cf["monthly_investable_estimate"]))
     em = res.get("emergency_fund_months")
     c[5].metric("Emergency fund", f"{em:.1f} mo" if em is not None else "—")
-    if n_mo < 2:
-        st.caption("⚠️ Less than 2 complete months of history yet — averages firm up as more data accrues.")
+    st.caption(f"Take-home savings rate shown; **excludes pre-tax 401(k) + transfers to savings** "
+               f"(true saving is higher). Income is {cf.get('pay_cadence','?')}."
+               + ("  ⚠️ <2 complete months — firms up over time." if n_mo < 2 else ""))
 
     left, right = st.columns([3, 2])
     with left:

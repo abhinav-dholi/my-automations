@@ -92,12 +92,14 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
     m_income: dict[str, float] = {}
     m_spend: dict[str, float] = {}
     m_spend_cat: dict[str, dict[str, float]] = {}
+    income_dates: list[int] = []
     excluded_movement = 0.0
     for t in txns:
         cat, amt, ym = t["category"], t["amount"], _ym(t["posted"])
         if cat == "Income":
             if amt > 0:
                 m_income[ym] = m_income.get(ym, 0.0) + amt
+                income_dates.append(t["posted"])
         elif cat in finance_rules.NON_SPEND:
             excluded_movement += abs(amt)
         elif amt < 0:
@@ -124,10 +126,34 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
         vals = [d.get(m, 0.0) for m in complete]
         return round(statistics.fmean(vals), 2) if vals else 0.0
 
-    monthly_income = _median(m_income)
-    monthly_spend = _median(m_spend)
+    # Pay cadence (biweekly pay = 26/yr, not 24) — from gaps between paychecks.
+    pay_dates = sorted(income_dates)
+    gaps = [(b - a) / 86400 for a, b in zip(pay_dates, pay_dates[1:])]
+    med_gap = statistics.median(gaps) if gaps else None
+    if med_gap is None:
+        pay_cadence = "unknown"
+    elif med_gap <= 9:
+        pay_cadence = "weekly"
+    elif med_gap <= 18:
+        pay_cadence = "biweekly (26/yr)"
+    elif med_gap <= 24:
+        pay_cadence = "semi-monthly"
+    else:
+        pay_cadence = "monthly"
+
+    # Savings rate is computed TIMING-NEUTRAL: total income vs total spend over
+    # the complete window (calendar boundaries / paycheck timing don't matter).
+    # Run-rate monthly figures = window totals / #complete months; median spend
+    # kept as the robust "typical month". NOTE: this rate excludes pre-tax 401(k)
+    # and money moved to savings/brokerage (transfers) — true saving is higher.
+    n = max(1, len(complete))
+    tot_income = sum(m_income.get(m, 0.0) for m in complete)
+    tot_spend = sum(m_spend.get(m, 0.0) for m in complete)
+    monthly_income = round(tot_income / n, 2)
+    monthly_spend = round(tot_spend / n, 2)
+    typical_month_spend = _median(m_spend)
     avg_monthly_spend = _mean(m_spend)
-    savings_rate = round((monthly_income - monthly_spend) / monthly_income, 3) if monthly_income else 0.0
+    savings_rate = round((tot_income - tot_spend) / tot_income, 3) if tot_income else 0.0
 
     # Per-month series (for the dashboard trend) + category monthly average.
     monthly_series = {m: {"income": round(m_income.get(m, 0.0), 2),
@@ -184,14 +210,19 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
         "lookback_days": lookback_days,
         "months_analyzed": len(complete),
         "cashflow": {
-            "monthly_income": monthly_income,          # median complete month
-            "monthly_spend": monthly_spend,            # median complete month (robust to one-offs)
-            "avg_monthly_spend": avg_monthly_spend,    # mean, for comparison
-            "savings_rate": savings_rate,
+            "monthly_income": monthly_income,          # run-rate: total income / #complete months
+            "monthly_spend": monthly_spend,            # run-rate: total spend / #complete months
+            "typical_month_spend": typical_month_spend,  # median month (robust to one-offs)
+            "avg_monthly_spend": avg_monthly_spend,
+            "savings_rate": savings_rate,              # timing-neutral: 1 - total_spend/total_income over window
             "monthly_investable_estimate": round(monthly_income - monthly_spend, 2),
+            "pay_cadence": pay_cadence,
             "excluded_movement_total": round(excluded_movement, 2),
-            "note": ("medians over complete calendar months; spend excludes "
-                     "transfers, card payments, and investment moves"),
+            "note": ("Savings rate is timing-neutral (total income vs total spend over "
+                     f"{len(complete)} complete months), so {pay_cadence} pay timing and "
+                     "lumpy rent don't distort it. IMPORTANT: it excludes pre-tax 401(k) "
+                     "contributions and money moved to savings/brokerage (transfers) — the "
+                     "user's true overall savings rate is higher than this take-home figure."),
         },
         "monthly_series": monthly_series,              # {YYYY-MM: {income, spend}}
         "spend_by_category_monthly": {
