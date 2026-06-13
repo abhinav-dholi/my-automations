@@ -519,6 +519,54 @@ def page_market():
     st.caption(f"Brief generated {brief.get('generated_at','')}")
 
 
+def _stream_council():
+    """Launch the council and stream its live debate progress into the UI."""
+    import time as _t
+    prog = config.DATA_DIR / "council_progress.jsonl"
+    try:
+        prog.unlink()          # clear stale events; orchestrator recreates it
+    except OSError:
+        pass
+    proc = subprocess.Popen([sys.executable, "cli/auto", "run", "finance-council"],
+                            cwd=str(REPO_ROOT),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    status = st.status("🏛 Convening the council…", expanded=True)
+    seen, done = 0, False
+    deadline = _t.time() + 360
+    while not done and _t.time() < deadline:
+        try:
+            lines = prog.read_text().splitlines()
+        except OSError:
+            lines = []
+        for ln in lines[seen:]:
+            seen += 1
+            try:
+                ev = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            e = ev.get("event")
+            if e == "start":
+                status.write(f"Panel: {', '.join(ev.get('personas', []))}")
+            elif e == "phase":
+                status.update(label=f"🏛 {ev.get('label','')}")
+                status.write(f"**— {ev.get('label','')}**")
+            elif e == "round1":
+                status.write(f"🗣 **{ev.get('persona','')}** — _{(ev.get('stance') or '')[:140]}_")
+            elif e == "round2":
+                ds = ev.get("disagreements", []) or []
+                whom = ", ".join(d.get("with", "") for d in ds[:2])
+                status.write(f"⚔️ **{ev.get('persona','')}** pushes back"
+                             + (f" on {whom}" if whom else ""))
+            elif e == "done":
+                done = True
+        if proc.poll() is not None and seen >= len(lines):
+            done = True
+        if not done:
+            _t.sleep(1)
+    proc.wait()
+    status.update(label="✅ Council complete — verdict below", state="complete")
+
+
 def page_council():
     st.title("Investment Council")
     st.caption("Eight investing philosophies debate your portfolio over live market data; "
@@ -527,8 +575,8 @@ def page_council():
 
     c1, c2 = st.columns([1, 2])
     if c1.button("▶ Run council (~2–3 min)", type="primary"):
-        out = _run_cli(["cli/auto", "run", "finance-council"], "Convening the council…")
-        st.cache_data.clear(); st.success(out[-150:] or "done"); st.rerun()
+        _stream_council()
+        st.cache_data.clear(); st.rerun()
 
     with st.expander("🧠 Ask a single expert"):
         sys.path.insert(0, str(config.LIB_PY))

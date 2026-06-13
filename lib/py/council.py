@@ -14,13 +14,25 @@ import json
 import os
 import re
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import config
 import features as features_mod
 import market_cli
 import store
 
 MAX_PARALLEL = 8
+PROGRESS = config.DATA_DIR / "council_progress.jsonl"
+
+
+def _emit(ev: dict) -> None:
+    """Append a progress event the UI can stream (best-effort)."""
+    try:
+        config.ensure_runtime_dirs()
+        with open(PROGRESS, "a") as fh:
+            fh.write(json.dumps(ev, default=str) + "\n")
+    except OSError:
+        pass
 
 # --- persona definitions (detailed philosophies) ------------------------
 PERSONAS: dict[str, dict] = {
@@ -253,15 +265,41 @@ def _panel_text(round1: list[dict]) -> str:
 def run_council(keys: list[str] | None = None) -> dict:
     store.init_db()  # ensure snapshots/insights tables exist
     keys = keys or list(PERSONAS)
-    data, feats = _gather()
-    history = _history(feats)
+    try:
+        open(PROGRESS, "w").close()  # truncate for a fresh run
+    except OSError:
+        pass
+    _emit({"event": "start", "personas": [PERSONAS[k]["name"] for k in keys]})
 
+    data, feats = _gather()
+    _emit({"event": "phase", "phase": "opinions",
+           "label": "Gathering each investor's opinion…"})
+
+    # Round 1 — opinions, emitted as each finishes.
+    round1 = []
     with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as ex:
-        round1 = list(ex.map(lambda k: _round1(k, data), keys))
+        futs = {ex.submit(_round1, k, data): k for k in keys}
+        for fut in as_completed(futs):
+            r = fut.result()
+            round1.append(r)
+            _emit({"event": "round1", "persona": r.get("persona"),
+                   "stance": r.get("stance"), "recommendation": r.get("recommendation"),
+                   "cons": r.get("cons", [])})
 
     panel = _panel_text(round1)
+    _emit({"event": "phase", "phase": "critique",
+           "label": "The panel debates — challenging each other…"})
+    round2 = []
     with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as ex:
-        round2 = list(ex.map(lambda k: _round2(k, data, panel), keys))
+        futs = {ex.submit(_round2, k, data, panel): k for k in keys}
+        for fut in as_completed(futs):
+            r = fut.result()
+            round2.append(r)
+            dis = r.get("disagreements", [])
+            _emit({"event": "round2", "persona": r.get("persona"),
+                   "disagreements": dis})
+    _emit({"event": "phase", "phase": "mediator",
+           "label": "Fiduciary mediator synthesizing a balanced verdict…"})
 
     # Mediator sees everything + continuity history. Unbiased, informational.
     debate_blob = json.dumps({"round1": round1, "round2": round2}, default=str)
@@ -297,7 +335,7 @@ def run_council(keys: list[str] | None = None) -> dict:
             "refined_recommendation": r2.get("refined_recommendation"),
         })
 
-    return {
+    result = {
         "summary": med.get("summary", ""),
         "consensus": med.get("consensus", []),
         "tradeoffs": med.get("tradeoffs", []),
@@ -308,6 +346,9 @@ def run_council(keys: list[str] | None = None) -> dict:
         "disclaimer": "Informational simulation of investing philosophies — balanced, "
                       "not biased to one school; not licensed financial advice.",
     }
+    _emit({"event": "done", "summary": result["summary"],
+           "n_actions": len(result["actions"])})
+    return result
 
 
 def run_expert(key: str, question: str | None = None) -> dict:
