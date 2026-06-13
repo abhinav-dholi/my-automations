@@ -55,6 +55,9 @@ def _acct_role(name: str, type_: str) -> str:
 
 LIQUID_TYPES = {"checking", "savings"}
 ANALYZE_DAYS = 400          # pull this much history for monthly aggregation
+# Emergency fund covers ESSENTIAL recurring expenses only — not discretionary
+# (Travel/Shopping/Dining) or one-off costs (e.g. a recent relocation).
+ESSENTIAL_CATEGORIES = {"Rent", "Utilities", "Groceries", "Health", "Transport"}
 
 
 def _ym(posted: int) -> str:
@@ -218,13 +221,16 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
         for c, v in m_spend_cat.get(m, {}).items():
             spend_by_cat[c] = spend_by_cat.get(c, 0.0) + v / n  # mean per month
 
+    # Emergency fund covers ESSENTIAL monthly expenses only (rent/utilities/
+    # groceries/transport/health) — not discretionary or one-off relocation costs.
+    essential_monthly = round(sum(v for c, v in spend_by_cat.items()
+                                  if c in ESSENTIAL_CATEGORIES), 2)
     liquid = sum(b["balance"] for b in balances if b["type"] in LIQUID_TYPES)
-    emergency_months = round(liquid / monthly_spend, 1) if monthly_spend else None
-    # Investable surplus = liquid cash BEYOND the emergency reserve you should
-    # keep. Money still needed for the buffer is NOT investable. The monthly
-    # to-savings flow builds this reserve; it's saving, not investable cash.
+    emergency_months = round(liquid / essential_monthly, 1) if essential_monthly else None
+    # Investable surplus = liquid cash BEYOND the emergency reserve. Money still
+    # needed for the buffer is NOT investable; the to-savings flow builds it.
     emerg_target_months = float((profile or {}).get("emergency_fund_months_target", 6) or 6)
-    emergency_target = round(emerg_target_months * monthly_spend, 2)
+    emergency_target = round(emerg_target_months * essential_monthly, 2)
     investable_surplus = round(max(0.0, liquid - emergency_target), 2)
 
     # Per-account value. For investment accounts use max(cash balance, holdings
@@ -318,10 +324,12 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
         },
         "resilience": {
             "liquid_cash": round(liquid, 2),
-            "emergency_fund_months": emergency_months,
+            "essential_monthly": essential_monthly,    # rent/utilities/groceries/transport/health
+            "emergency_fund_months": emergency_months,  # months of ESSENTIALS covered by liquid
             "emergency_fund_target_months": emerg_target_months,
             "emergency_fund_target": emergency_target,
             "emergency_fund_funded": emergency_months is not None and emergency_months >= emerg_target_months,
+            "note": "Emergency fund sizes ESSENTIAL expenses only — not discretionary/one-off spend.",
         },
         "net_worth": net_worth,
         "net_worth_breakdown": {
