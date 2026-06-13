@@ -158,14 +158,14 @@ def page_overview():
     tgt = res.get("emergency_fund_target_months", 6)
     ess = res.get("essential_monthly", 0)
     if surplus > 0:
-        st.success(f"✅ **Investable surplus: {_money(surplus)}** — liquid cash beyond a "
+        st.success(_md(f"✅ **Investable surplus: {_money(surplus)}** — liquid cash beyond a "
                    f"{tgt:.0f}-month emergency reserve (you have {em} mo of essentials covered). "
                    f"Reserve sizes essentials only (~{_money(ess)}/mo: rent/utilities/groceries/"
-                   "transport/health), not discretionary or one-off moving costs.")
+                   "transport/health), not discretionary or one-off moving costs."))
     else:
         gap = max(0, (res.get("emergency_fund_target", 0) - nb["liquid_cash"]))
-        st.warning(f"🪙 **Investable surplus: $0** — still building the {tgt:.0f}-month essentials "
-                   f"reserve ({em} of {tgt:.0f} mo; ~{_money(gap)} to go). Finish it before investing cash.")
+        st.warning(_md(f"🪙 **Investable surplus: $0** — still building the {tgt:.0f}-month essentials "
+                   f"reserve ({em} of {tgt:.0f} mo; ~{_money(gap)} to go). Finish it before investing cash."))
 
     # ── Monthly money flow (reconciled) ──
     st.divider()
@@ -177,9 +177,9 @@ def page_overview():
     m2.metric("Spend", _money(cf["monthly_spend"]), help=f"Typical month {_money(cf.get('typical_month_spend'))} (median).")
     m3.metric("Saved", _money(cf["monthly_to_savings"]), help="Net cash moved into savings/brokerage.")
     m4.metric("Savings rate", f"{cf['savings_rate']*100:.0f}%", help="Saved ÷ (saved + spent). After-tax; 401(k) not modeled.")
-    st.caption(f"Of every dollar you deploy, **{cf['savings_rate']*100:.0f}% is saved**. Salary is "
+    st.caption(_md(f"Of every dollar you deploy, **{cf['savings_rate']*100:.0f}% is saved**. Salary is "
                f"{cf.get('pay_cadence','')}; ~{_money(cf['est_other_income'])}/mo is non-salary income (RSU/bonus). "
-               f"Emergency fund: **{res.get('emergency_fund_months','—')} months of essentials** covered."
+               f"Emergency fund: **{res.get('emergency_fund_months','—')} months of essentials** covered.")
                + ("  ⚠️ only %d complete month(s) of history — firms up over time." % n_mo if n_mo < 2 else ""))
 
     # ── Net worth composition + allocation vs target ──
@@ -269,33 +269,61 @@ def page_spending():
     spend = df[(df["amount"] < 0) & (~df["category"].isin(finance_rules.NON_SPEND))].copy()
     spend["spend"] = spend["amount"].abs()
 
-    c = st.columns(4)
-    c[0].metric("Total spend", _money(spend["spend"].sum()))
-    c[1].metric("Income", _money(df[df["category"] == "Income"]["amount"].sum()))
-    c[2].metric("Transactions", len(spend))
-    c[3].metric("Top category", spend.groupby("category")["spend"].sum().idxmax() if len(spend) else "—")
+    if spend.empty:
+        st.info("No spending in this range."); return
 
-    left, right = st.columns(2)
+    import features as _feat
+    ESS = _feat.ESSENTIAL_CATEGORIES
+    months_in = max(0.5, (end - start) / 2629800)   # seconds → ~months
+    total = spend["spend"].sum()
+    spend["bucket"] = spend["category"].apply(lambda x: "Essential" if x in ESS else "Discretionary")
+    ess_tot = spend.loc[spend["bucket"] == "Essential", "spend"].sum()
+    disc_tot = total - ess_tot
+
+    c = st.columns(5)
+    c[0].metric("Total spend", _money(total))
+    c[1].metric("Avg / month", _money(total / months_in))
+    c[2].metric("Essential", _money(ess_tot),
+                help="Rent, utilities, groceries, transport, health — your baseline.")
+    c[3].metric("Discretionary", _money(disc_tot),
+                help="Dining, shopping, travel, etc. — the flexible part.")
+    c[4].metric("Income (range)", _money(df[df["category"] == "Income"]["amount"].sum()))
+
+    left, right = st.columns([3, 2])
     with left:
         st.subheader("By category")
         bycat = spend.groupby("category")["spend"].sum().sort_values(ascending=True)
         fig = px.bar(bycat, orientation="h", template=PLOT_TEMPLATE,
-                     color_discrete_sequence=[ACCENT])
-        fig.update_layout(height=360, showlegend=False, margin=dict(t=20, b=10, l=10, r=10),
+                     color_discrete_sequence=[ACCENT], text=bycat.values)
+        fig.update_traces(texttemplate="$%{text:,.0f}", textposition="outside", cliponaxis=False)
+        fig.update_layout(height=380, showlegend=False, margin=dict(t=10, b=10, l=10, r=50),
                           xaxis_title=None, yaxis_title=None)
         st.plotly_chart(fig, use_container_width=True)
     with right:
-        st.subheader("Category share")
-        bycat2 = spend.groupby("category")["spend"].sum()
-        st.plotly_chart(donut(list(bycat2.index), list(bycat2.values)), use_container_width=True)
+        st.subheader("Essential vs discretionary")
+        st.plotly_chart(donut(["Essential", "Discretionary"], [ess_tot, disc_tot]),
+                        use_container_width=True)
+        st.caption(f"{ess_tot/total*100:.0f}% essential · {disc_tot/total*100:.0f}% discretionary"
+                   if total else "")
 
-    st.subheader("Spend over time (weekly)")
-    wk = spend.set_index("date").resample("W")["spend"].sum().reset_index()
-    fig = px.bar(wk, x="date", y="spend", template=PLOT_TEMPLATE,
-                 color_discrete_sequence=[ACCENT])
-    fig.update_layout(height=280, margin=dict(t=20, b=10, l=10, r=10),
-                      xaxis_title=None, yaxis_title=None)
-    st.plotly_chart(fig, use_container_width=True)
+    cL, cR = st.columns(2)
+    with cL:
+        st.subheader("Spend over time (weekly)")
+        wk = spend.set_index("date").resample("W")["spend"].sum().reset_index()
+        fig = px.bar(wk, x="date", y="spend", template=PLOT_TEMPLATE, color_discrete_sequence=[ACCENT])
+        fig.update_layout(height=300, margin=dict(t=10, b=10, l=10, r=10), xaxis_title=None, yaxis_title=None)
+        st.plotly_chart(fig, use_container_width=True)
+    with cR:
+        st.subheader("Top merchants")
+        sp2 = spend.copy()
+        sp2["merchant"] = sp2["description"].apply(store.merchant_key)
+        topm = (sp2.groupby("merchant")
+                .agg(Spent=("spend", "sum"), Txns=("spend", "size"))
+                .sort_values("Spent", ascending=False).head(12).reset_index())
+        topm["merchant"] = topm["merchant"].str.title()
+        st.dataframe(topm.rename(columns={"merchant": "Merchant"}), hide_index=True,
+                     use_container_width=True, height=300,
+                     column_config={"Spent": st.column_config.NumberColumn(format="$%.0f")})
 
     st.subheader("Transactions — edit categories")
     ec1, ec2 = st.columns([3, 1])
@@ -424,7 +452,7 @@ def page_investments():
             use_container_width=True, hide_index=True,
         )
     if not excluded.empty:
-        st.caption(f"Excluded {len(excluded)} unvested/$0-balance holding(s) "
+        st.caption(f"Excluded {len(excluded)} unvested/\\$0-balance holding(s) "
                    f"(${excluded['market_value'].sum():,.0f}) from invested totals.")
     st.caption("Concentration in a single holding is a key risk the analysis flags.")
 
@@ -453,7 +481,7 @@ def page_splitwise():
     fig.update_layout(height=360, margin=dict(t=20, b=10, l=10, r=10),
                       xaxis_title=None, yaxis_title=None, coloraxis_showscale=False)
     st.plotly_chart(fig, use_container_width=True)
-    st.caption(f"Your share of shared expenses (90d): {_money(db['sw_share'])}")
+    st.caption(_md(f"Your share of shared expenses (90d): {_money(db['sw_share'])}"))
 
 
 def page_analysis():
