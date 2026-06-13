@@ -12,8 +12,22 @@ import statistics
 import time
 from collections import defaultdict
 
+import yaml
+
+import config
 import finance_rules
 import store
+
+
+def _load_profile() -> dict:
+    """User profile (risk, goals, target allocation, 401k %). Real file wins;
+    committed example is the fallback."""
+    real = config.DATA_DIR / "profile.yaml"
+    example = config.REPO_ROOT / "profile.example.yaml"
+    path = real if real.exists() else example
+    if path.exists():
+        return yaml.safe_load(path.read_text()) or {}
+    return {}
 
 
 def _clean_acct(name: str) -> str:
@@ -79,6 +93,8 @@ def window_summary(days: int) -> dict:
 
 
 def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dict:
+    if profile is None:                 # auto-load so every caller gets it
+        profile = _load_profile()
     since = int(time.time()) - lookback_days * 86400
     since_iso = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime(since))
     with store.connect() as conn:
