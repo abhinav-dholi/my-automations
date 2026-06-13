@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import statistics
 import time
+from collections import defaultdict
 
 import finance_rules
 import store
@@ -153,7 +154,42 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
     monthly_spend = round(tot_spend / n, 2)
     typical_month_spend = _median(m_spend)
     avg_monthly_spend = _mean(m_spend)
-    savings_rate = round((tot_income - tot_spend) / tot_income, 3) if tot_income else 0.0
+    take_home_surplus_rate = round((tot_income - tot_spend) / tot_income, 3) if tot_income else 0.0
+
+    # TRUE saving = money actually moved into savings/brokerage accounts (net
+    # Transfer flow) + pre-tax 401(k). The take-home surplus rate misses both.
+    acct_type = {b["id"]: b["type"] for b in balances}
+    acct_name = {b["id"]: (b["name"] or "").lower() for b in balances}
+
+    def _is_savings_dest(aid: str) -> bool:
+        t, n = acct_type.get(aid), acct_name.get(aid, "")
+        if t == "savings":
+            return True
+        # taxable brokerage / equity-award (investment, but NOT retirement/HSA — those are tracked separately)
+        if t == "investment" and not any(k in n for k in ["401", "ira", "roth", "retirement", "hsa", "health savings"]):
+            return True
+        return False
+
+    net_to_savings = sum(
+        t["amount"] for t in txns
+        if _ym(t["posted"]) in complete and t["category"] in finance_rules.NON_SPEND
+        and t["category"] != "Income" and _is_savings_dest(t["account_id"])
+    )
+    monthly_to_savings = round(net_to_savings / n, 2)
+
+    # 401(k): pre-tax % of gross. Use profile gross if given, else estimate from
+    # take-home (gross = take_home / (1 - contrib% - effective_tax%)).
+    p = profile or {}
+    contrib_pct = float(p.get("retirement_contrib_pct", 0) or 0)
+    tax_rate = float(p.get("effective_tax_rate", 0.27) or 0.27)
+    gross = float(p.get("gross_monthly_income", 0) or 0)
+    if not gross and contrib_pct and monthly_income and (1 - contrib_pct - tax_rate) > 0:
+        gross = monthly_income / (1 - contrib_pct - tax_rate)
+    monthly_401k = round(contrib_pct * gross, 2) if gross else 0.0
+
+    total_saved = max(monthly_to_savings, 0.0) + monthly_401k
+    income_base = monthly_income + monthly_401k        # take-home + pre-tax 401(k) ≈ gross-of-401k
+    savings_rate = round(total_saved / income_base, 3) if income_base else 0.0
 
     # Per-month series (for the dashboard trend) + category monthly average.
     monthly_series = {m: {"income": round(m_income.get(m, 0.0), 2),
@@ -167,35 +203,46 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
     liquid = sum(b["balance"] for b in balances if b["type"] in LIQUID_TYPES)
     emergency_months = round(liquid / monthly_spend, 1) if monthly_spend else None
 
-    # Net worth = sum of all account balances. An investment account's balance
-    # already reflects its holdings, so do NOT add holdings again (avoids the
-    # double-count). Investable portfolio = funded investment-account balances.
-    net_worth = round(sum(b["balance"] for b in balances), 2)
-    invest_total = round(sum(b["balance"] for b in balances if b["type"] == "investment"), 2)
+    # Per-account value. For investment accounts use max(cash balance, holdings
+    # value): handles brokerages whose balance already includes holdings AND
+    # equity-award accounts that report $0 cash but hold vested stock.
+    hold_by_acct: dict[str, float] = defaultdict(float)
+    for h in holdings:
+        hold_by_acct[h["account_id"]] += h["market_value"] or 0.0
 
-    # Allocation: only holdings in funded accounts (balance > 0) — excludes
-    # unvested/$0-balance accounts (e.g. equity awards) that would overstate.
-    funded = {b["id"] for b in balances if b["type"] == "investment" and b["balance"] > 0}
-    funded_holdings = [h for h in holdings if h["account_id"] in funded]
-    hv = sum(h["market_value"] for h in funded_holdings) or 0.0
+    def _acct_value(b) -> float:
+        if b["type"] == "investment":
+            return max(b["balance"], hold_by_acct.get(b["id"], 0.0))
+        return b["balance"]
+
+    net_worth = round(sum(_acct_value(b) for b in balances), 2)
+    invest_total = round(sum(_acct_value(b) for b in balances if b["type"] == "investment"), 2)
+    funded_ids = {b["id"] for b in balances if b["type"] == "investment" and _acct_value(b) > 0}
+
+    # Aggregate holdings by SYMBOL across all funded accounts (so META held in
+    # both a brokerage and an equity-award account counts once, concentration true).
+    agg: dict[str, dict] = defaultdict(lambda: {"mv": 0.0, "cost": 0.0, "name": ""})
+    for h in holdings:
+        if h["account_id"] in funded_ids:
+            a = agg[h["symbol"]]
+            a["mv"] += h["market_value"] or 0.0
+            a["cost"] += h["cost_basis"] or 0.0
+            a["name"] = h["name"]
+    hv = sum(a["mv"] for a in agg.values()) or 0.0
     allocation = [
         {
-            "symbol": h["symbol"],
-            "name": h["name"],   # e.g. "VANGUARD TARGET 2065" — lets agents see what it actually is
-            "pct_of_portfolio": round(h["market_value"] / hv, 3) if hv else 0.0,
-            "gain_pct": round((h["market_value"] - h["cost_basis"]) / h["cost_basis"], 3)
-            if h["cost_basis"] else None,
+            "symbol": s, "name": a["name"],
+            "pct_of_portfolio": round(a["mv"] / hv, 3) if hv else 0.0,
+            "gain_pct": round((a["mv"] - a["cost"]) / a["cost"], 3) if a["cost"] else None,
         }
-        for h in funded_holdings
+        for s, a in sorted(agg.items(), key=lambda kv: -kv[1]["mv"])
     ]
     top_concentration = max((a["pct_of_portfolio"] for a in allocation), default=0.0)
 
-    # Deterministic current allocation across investable assets (liquid cash +
-    # investments), so the analysis is consistent run-to-run. Bonds detected by
-    # symbol/name; everything else in investments counts as equity.
+    # Current allocation across investable assets (liquid cash + investments).
     BOND_SYMS = {"BND", "AGG", "BNDX", "BIV", "VCIT", "VGIT", "SCHZ", "GOVT"}
-    bond_val = sum(h["market_value"] for h in funded_holdings
-                   if h["symbol"] in BOND_SYMS or "bond" in (h["name"] or "").lower())
+    bond_val = sum(a["mv"] for s, a in agg.items()
+                   if s in BOND_SYMS or "bond" in (a["name"] or "").lower())
     equity_val = max(invest_total - bond_val, 0.0)
     investable_base = round(liquid + invest_total, 2)
     alloc_current = {
@@ -210,19 +257,22 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
         "lookback_days": lookback_days,
         "months_analyzed": len(complete),
         "cashflow": {
-            "monthly_income": monthly_income,          # run-rate: total income / #complete months
-            "monthly_spend": monthly_spend,            # run-rate: total spend / #complete months
-            "typical_month_spend": typical_month_spend,  # median month (robust to one-offs)
+            "monthly_income": monthly_income,          # take-home run-rate over #complete months
+            "monthly_spend": monthly_spend,            # run-rate consumption (excl. transfers/savings)
+            "typical_month_spend": typical_month_spend,
             "avg_monthly_spend": avg_monthly_spend,
-            "savings_rate": savings_rate,              # timing-neutral: 1 - total_spend/total_income over window
-            "monthly_investable_estimate": round(monthly_income - monthly_spend, 2),
+            "savings_rate": savings_rate,              # TRUE: (to-savings + 401k) / (take-home + 401k)
+            "take_home_surplus_rate": take_home_surplus_rate,  # (income - consumption)/income, secondary
+            "monthly_to_savings": monthly_to_savings,  # net into savings/brokerage accounts
+            "est_401k_monthly": monthly_401k,
+            "monthly_investable_estimate": round(monthly_to_savings + monthly_401k, 2),
             "pay_cadence": pay_cadence,
             "excluded_movement_total": round(excluded_movement, 2),
-            "note": ("Savings rate is timing-neutral (total income vs total spend over "
-                     f"{len(complete)} complete months), so {pay_cadence} pay timing and "
-                     "lumpy rent don't distort it. IMPORTANT: it excludes pre-tax 401(k) "
-                     "contributions and money moved to savings/brokerage (transfers) — the "
-                     "user's true overall savings rate is higher than this take-home figure."),
+            "note": (f"Savings rate counts money actually saved: net into savings/brokerage "
+                     f"(${monthly_to_savings:,.0f}/mo) + pre-tax 401(k) (~${monthly_401k:,.0f}/mo "
+                     f"@ {int(contrib_pct*100)}% of gross) over the take-home + 401(k) base. "
+                     f"Timing-neutral over {len(complete)} complete months ({pay_cadence} pay). "
+                     "take_home_surplus_rate is the narrower income-minus-consumption view."),
         },
         "monthly_series": monthly_series,              # {YYYY-MM: {income, spend}}
         "spend_by_category_monthly": {

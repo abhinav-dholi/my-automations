@@ -139,13 +139,15 @@ def page_overview():
                 help=f"Run-rate over {n_mo} month(s); typical month "
                      f"{_money(cf.get('typical_month_spend'))} (median, ignores spikes).")
     c[3].metric("Savings rate", f"{cf['savings_rate']*100:.0f}%",
-                help="Timing-neutral (total income vs spend over the window). EXCLUDES "
-                     "pre-tax 401(k) + transfers to savings — your true rate is higher.")
-    c[4].metric("Investable / mo", _money(cf["monthly_investable_estimate"]))
+                help=f"Money actually saved: ~{_money(cf.get('monthly_to_savings'))}/mo into "
+                     f"savings/brokerage + ~{_money(cf.get('est_401k_monthly'))}/mo pre-tax 401(k), "
+                     f"over take-home + 401(k). Take-home surplus alone: {cf.get('take_home_surplus_rate',0)*100:.0f}%.")
+    c[4].metric("Saved / mo", _money(cf["monthly_investable_estimate"]))
     em = res.get("emergency_fund_months")
     c[5].metric("Emergency fund", f"{em:.1f} mo" if em is not None else "—")
-    st.caption(f"Take-home savings rate shown; **excludes pre-tax 401(k) + transfers to savings** "
-               f"(true saving is higher). Income is {cf.get('pay_cadence','?')}."
+    st.caption(f"Savings rate counts net transfers to savings (~{_money(cf.get('monthly_to_savings'))}/mo) "
+               f"+ pre-tax 401(k) (~{_money(cf.get('est_401k_monthly'))}/mo). Income is "
+               f"{cf.get('pay_cadence','?')}; estimated from bank flows."
                + ("  ⚠️ <2 complete months — firms up over time." if n_mo < 2 else ""))
 
     left, right = st.columns([3, 2])

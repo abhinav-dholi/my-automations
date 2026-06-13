@@ -72,10 +72,14 @@ def format_text(s: dict) -> str:
             lines.append(f"   {sign}${abs(b['amount']):,.0f}  {b['friend_name'][:24]} ({who})")
 
     em = s["resilience"].get("emergency_fund_months")
+    sr = cf.get("savings_rate", 0) * 100
     lines += [
         "",
-        f"📅 Typical month: income ${cf['monthly_income']:,.0f} / "
-        f"spend ${cf['monthly_spend']:,.0f} → save ${cf['monthly_investable_estimate']:,.0f}",
+        f"📅 Monthly ({cf.get('pay_cadence','')}): income ~${cf['monthly_income']:,.0f}, "
+        f"spend ~${cf['monthly_spend']:,.0f}",
+        f"💰 Saving ~${cf.get('monthly_investable_estimate',0):,.0f}/mo "
+        f"(${cf.get('monthly_to_savings',0):,.0f} to savings + ${cf.get('est_401k_monthly',0):,.0f} 401k) "
+        f"= {sr:.0f}% rate",
     ]
     if em is not None:
         lines.append(f"🛟 Emergency fund: {em:.1f} months")
