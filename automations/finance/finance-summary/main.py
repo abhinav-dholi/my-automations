@@ -55,7 +55,8 @@ def format_text(s: dict) -> str:
     if invest:
         holds = s["portfolio"].get("holdings") or []
         top = holds[0] if holds else None
-        conc = f" ({top['symbol']} {top['pct_of_portfolio']*100:.0f}%)" if top else ""
+        label = (top.get("name") or top.get("symbol")) if top else ""
+        conc = f" (top: {label} {top['pct_of_portfolio']*100:.0f}%)" if top else ""
         lines += ["", f"📈 Portfolio: ${invest:,.0f}{conc}"]
 
     net = sum(s["splitwise_net"].values()) if s["splitwise_net"] else 0

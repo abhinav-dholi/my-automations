@@ -130,6 +130,7 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
     allocation = [
         {
             "symbol": h["symbol"],
+            "name": h["name"],   # e.g. "VANGUARD TARGET 2065" — lets agents see what it actually is
             "pct_of_portfolio": round(h["market_value"] / hv, 3) if hv else 0.0,
             "gain_pct": round((h["market_value"] - h["cost_basis"]) / h["cost_basis"], 3)
             if h["cost_basis"] else None,
