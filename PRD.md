@@ -333,3 +333,68 @@ Generalizes beyond finance: an automation may be `runtime: code` (python/node �
 - **15b** Feature builder + manual holdings + market-price cache.
 - **15c** Agent orchestrator via Claude Code headless (`claude -p`) + synthesizer + `data/profile.yaml`; exposed as `/finance-analyze` skill. Subscription auth (`CLAUDE_CODE_OAUTH_TOKEN`).
 - **15d** UI surfacing of insights/allocation (extends §13 finance dashboard).
+
+## 16. Investment Council (multi-agent investor debate) — PLAN
+
+A panel of agents, each embodying a top investing philosophy, debates over the
+user's anonymized portfolio + a live market brief; a fiduciary **mediator**
+synthesizes ranked, actionable advice. On-demand. **Not licensed advice** —
+personas simulate *frameworks*, not real-time opinions of living people.
+
+### 16.1 Decisions (locked)
+- **Panel (8):** Value (Buffett/Graham), Passive/Index (Bogle), Macro/All-Weather
+  (Dalio), Growth/GARP (Lynch), Risk & Cycles (Marks), Quant/Factor (Fama-French),
+  Tail-risk/Antifragility (Taleb), Disruptive Growth (Cathie Wood).
+- **Mediator:** fiduciary CFP — weighs all views against the user's profile
+  (risk, horizon, goals, liquidity, emergency-fund status) and resolves conflicts.
+- **Debate:** panel opinions → one cross-critique round → mediator synthesis.
+- **Data:** hybrid — structured APIs (prices + macro) + Claude web tools (news).
+- **Cadence:** on-demand (Telegram/UI/CLI). `market-watch` may run more often.
+
+### 16.2 Components (all category `finance`)
+- **`market-data-sync`** (python, scheduled/on-demand): prices for held tickers +
+  benchmarks (SPY/QQQ/AGG/GLD) via a free API (Finnhub), macro series via FRED
+  (Fed funds, CPI YoY, 10y yield, unemployment). Stores in `market_prices` (exists)
+  + new `macro_series`. Secrets: `FINNHUB_API_KEY`, `FRED_API_KEY` (both free).
+- **`market-watch`** (`runtime: claude`, WebSearch/WebFetch): gathers + summarizes
+  market-moving news relevant to holdings + macro into `market_news` +
+  `data/market-brief.json`, with cited sources.
+- **`finance-council`** (`runtime: claude`, on-demand): the debate + mediation.
+  Tools (scoped): `finance_cli features` (anonymized portfolio), a new
+  `market_cli brief` (prices/macro/news brief), `store-insight`, `notify`.
+  Prompt orchestrates: (1) load features + brief, (2) each of the 8 personas gives
+  a recommendation through its lens citing data, (3) a cross-critique round where
+  personas challenge each other, (4) mediator synthesis → ranked actions with
+  confidence + noted dissent. Output → `insights` (agent=finance-council) +
+  Telegram + UI.
+
+### 16.3 Data model (new)
+- `macro_series` — series, date, value (PK series+date).
+- `market_news` — id, fetched_at, source, headline, summary, url, tickers, relevance.
+- Reuse `market_prices` and `insights`.
+
+### 16.4 Surfaces
+- Telegram: `/finance council` (runs finance-council); `/finance brief` (latest market-watch).
+- UI: new **Council** page — per-persona takes, the critique round, and the
+  mediator's verdict + prioritized actions.
+- CLI: `auto run market-data-sync | market-watch | finance-council`.
+
+### 16.5 Privacy & guardrails
+- Personas receive ONLY anonymized features (allocation %, tickers, cash, risk
+  profile) + public market/news data — same boundary as §15. No raw transactions.
+- Ground every claim in the brief or features; mediator flags uncertainty and
+  cites sources; "not licensed financial advice" disclaimer on every output.
+- News hallucination risk mitigated by fetch-then-reason (market-watch stores
+  sourced facts; council reasons over the stored brief, not free recall).
+
+### 16.6 Phasing
+- **16a** Data: `macro_series` + `market_news` tables; `market-data-sync`
+  (Finnhub + FRED); `market-watch` (web news → brief) + `market_cli brief` tool.
+- **16b** `finance-council` automation (8 personas + critique + mediator).
+- **16c** Telegram `/finance council` + `/finance brief`.
+- **16d** UI Council page.
+
+### 16.7 User setup & cost
+- Free API keys in Keychain: `FINNHUB_API_KEY`, `FRED_API_KEY`.
+- Cost: on-demand; a full 8-persona + critique + mediator run is the heaviest
+  automation (~$0.50–$2/run depending on context). Kept on-demand by design.
