@@ -12,7 +12,11 @@ own anonymized data.
   - `spend_by_category_monthly` (avg per month)
   - `resilience` (liquid_cash, emergency_fund_months)
   - `net_worth`, `net_worth_breakdown` (liquid_cash, taxable_investments,
-    retirement_locked, credit_debt), `investable_cash` (deployable now)
+    retirement_locked, credit_debt)
+  - `investable_surplus` = liquid cash BEYOND the emergency reserve (the ONLY cash
+    free to invest). `resilience` has emergency_fund_months vs target + funded flag.
+    If surplus is ~$0, the priority is finishing the emergency fund, NOT deploying
+    cash — the monthly to-savings flow is building that reserve, it is not investable.
   - `portfolio` (controllable_total, taxable_value, retirement_value,
     holdings[symbol,name,pct_of_taxable,pct_of_controllable,gain_pct], top_concentration_pct)
   - `allocation` (over CONTROLLABLE = cash + taxable, EXCLUDING locked 401k:

@@ -104,8 +104,9 @@ def _money(x) -> str:
 
 
 def _md(text) -> str:
-    """Escape $ so Streamlit markdown doesn't treat text as LaTeX math."""
-    return str(text or "").replace("$", "\\$")
+    """Escape chars Streamlit markdown would misread: $ (LaTeX math) and ~ (a
+    pair of ~ renders as strikethrough, e.g. '~$288 … ~$5,941')."""
+    return str(text or "").replace("$", "\\$").replace("~", "\\~")
 
 
 # --- shared chart helpers ----------------------------------------------
@@ -145,10 +146,24 @@ def page_overview():
     # ── Top line: net worth + the money buckets ──
     c = st.columns(5)
     c[0].metric("Net worth", _money(f["net_worth"]))
-    c[1].metric("💵 Investable cash", _money(f["investable_cash"]), help="Liquid cash you can deploy now (excl. locked 401k).")
+    c[1].metric("💵 Liquid cash", _money(nb["liquid_cash"]),
+                help="Checking + savings. Part of this is your emergency reserve, not free to invest.")
     c[2].metric("📈 Taxable invest", _money(nb["taxable_investments"]))
-    c[3].metric("🔒 Retirement (locked)", _money(nb["retirement_locked"]), help="401(k)/HSA — not counted as investable.")
+    c[3].metric("🔒 Retirement (locked)", _money(nb["retirement_locked"]), help="401(k)/HSA — you won't touch it.")
     c[4].metric("💳 Card debt", _money(abs(nb["credit_debt"])))
+
+    # Investable surplus = cash beyond the emergency reserve (what you can deploy).
+    surplus = f.get("investable_surplus", 0)
+    em = res.get("emergency_fund_months")
+    tgt = res.get("emergency_fund_target_months", 6)
+    if surplus > 0:
+        st.success(f"✅ Investable surplus: **{_money(surplus)}** — cash beyond your "
+                   f"{tgt:.0f}-month emergency reserve, free to deploy.")
+    else:
+        gap = max(0, (res.get("emergency_fund_target", 0) - nb["liquid_cash"]))
+        st.warning(f"🪙 Investable surplus: **$0** — your liquid cash is still building the "
+                   f"{tgt:.0f}-month emergency reserve ({em} of {tgt:.0f} months; ~{_money(gap)} to go). "
+                   "Finish the reserve before deploying cash into investments.")
 
     # ── Monthly money flow (reconciled) ──
     st.divider()

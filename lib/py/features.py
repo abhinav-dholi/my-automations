@@ -220,6 +220,12 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
 
     liquid = sum(b["balance"] for b in balances if b["type"] in LIQUID_TYPES)
     emergency_months = round(liquid / monthly_spend, 1) if monthly_spend else None
+    # Investable surplus = liquid cash BEYOND the emergency reserve you should
+    # keep. Money still needed for the buffer is NOT investable. The monthly
+    # to-savings flow builds this reserve; it's saving, not investable cash.
+    emerg_target_months = float((profile or {}).get("emergency_fund_months_target", 6) or 6)
+    emergency_target = round(emerg_target_months * monthly_spend, 2)
+    investable_surplus = round(max(0.0, liquid - emergency_target), 2)
 
     # Per-account value. For investment accounts use max(cash balance, holdings
     # value): handles brokerages whose balance already includes holdings AND
@@ -243,7 +249,6 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
     other_bal = round(sum(b["balance"] for b in balances
                           if b["type"] not in ("checking", "savings", "investment", "credit")), 2)
     net_worth = round(liquid + taxable_inv + retirement_locked + credit_debt + other_bal, 2)
-    investable_cash = round(liquid, 2)          # deployable now (you won't touch the 401k)
     controllable = round(liquid + taxable_inv, 2)  # cash + taxable holdings you can rebalance
 
     # Concentration is over what you CONTROL (cash + taxable holdings), excluding
@@ -314,6 +319,9 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
         "resilience": {
             "liquid_cash": round(liquid, 2),
             "emergency_fund_months": emergency_months,
+            "emergency_fund_target_months": emerg_target_months,
+            "emergency_fund_target": emergency_target,
+            "emergency_fund_funded": emergency_months is not None and emergency_months >= emerg_target_months,
         },
         "net_worth": net_worth,
         "net_worth_breakdown": {
@@ -322,7 +330,8 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
             "retirement_locked": retirement_locked,   # 401k/HSA — not investable now
             "credit_debt": credit_debt,
         },
-        "investable_cash": investable_cash,            # what you can actually deploy
+        "investable_surplus": investable_surplus,      # liquid cash BEYOND the emergency reserve (deployable)
+        "investable_cash": investable_surplus,         # alias; NOT the savings flow
         "portfolio": {
             "controllable_total": controllable,        # cash + taxable holdings
             "taxable_value": taxable_inv,

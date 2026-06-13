@@ -148,8 +148,11 @@ MEDIATOR_PROMPT = (
     "concentration vs target), with each action noting which philosophies support and "
     "oppose it — explicitly framed as one informed option among reasonable choices, "
     "NOT the only answer; (4) list WATCH ITEMS to monitor. Ground every point in a "
-    "number. Represent the full spectrum fairly. Informational only — not licensed "
-    "financial advice."
+    "number. Represent the full spectrum fairly. CRITICAL: only `investable_surplus` "
+    "(liquid cash beyond the emergency reserve) is free to invest — if it is ~$0, the "
+    "priority is completing the emergency fund and the monthly to-savings flow is "
+    "building that reserve, NOT investable cash; do not recommend deploying "
+    "emergency-reserve cash. Informational only — not licensed financial advice."
 )
 
 
@@ -272,6 +275,7 @@ def run_council(keys: list[str] | None = None) -> dict:
     _emit({"event": "start", "personas": [PERSONAS[k]["name"] for k in keys]})
 
     data, feats = _gather()
+    history = _history(feats)
     _emit({"event": "phase", "phase": "opinions",
            "label": "Gathering each investor's opinion…"})
 
