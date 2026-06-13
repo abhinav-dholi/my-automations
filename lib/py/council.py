@@ -178,7 +178,8 @@ def _snapshot_of(feats: dict) -> dict:
     cf = feats.get("cashflow", {})
     return {
         "net_worth": feats.get("net_worth"),
-        "invested_total": feats.get("portfolio", {}).get("invested_total"),
+        "investable_cash": feats.get("investable_cash"),
+        "taxable_investments": feats.get("net_worth_breakdown", {}).get("taxable_investments"),
         "allocation_current": feats.get("allocation", {}).get("current"),
         "monthly_income": cf.get("monthly_income"),
         "monthly_spend": cf.get("monthly_spend"),

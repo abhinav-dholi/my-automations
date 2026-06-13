@@ -38,7 +38,6 @@ def format_text(s: dict) -> str:
     bal = s["balances"]
     liquid = sum(b["balance"] for b in bal if b["type"] in LIQUID)
     credit = sum(b["balance"] for b in bal if b["type"] == "credit")
-    invest = s["portfolio"]["invested_total"]
     cf = s["cashflow"]
 
     lines = [
@@ -52,12 +51,16 @@ def format_text(s: dict) -> str:
     if credit:
         lines.append(f"💳 Credit owed: ${abs(credit):,.0f}")
 
-    if invest:
+    taxable = s["portfolio"].get("taxable_value", 0)
+    retire = s["portfolio"].get("retirement_value", 0)
+    if taxable or retire:
         holds = s["portfolio"].get("holdings") or []
         top = holds[0] if holds else None
         label = (top.get("name") or top.get("symbol")) if top else ""
-        conc = f" (top: {label} {top['pct_of_portfolio']*100:.0f}%)" if top else ""
-        lines += ["", f"📈 Portfolio: ${invest:,.0f}{conc}"]
+        conc = f" — top: {label} {top.get('pct_of_controllable',0)*100:.0f}% of investable" if top else ""
+        lines += ["", f"📈 Taxable investments: ${taxable:,.0f}{conc}"]
+        if retire:
+            lines.append(f"🔒 Retirement (locked 401k/HSA): ${retire:,.0f}")
 
     net = sum(s["splitwise_net"].values()) if s["splitwise_net"] else 0
     if s["splitwise"]:
@@ -75,11 +78,10 @@ def format_text(s: dict) -> str:
     sr = cf.get("savings_rate", 0) * 100
     lines += [
         "",
-        f"📅 Monthly ({cf.get('pay_cadence','')}): income ~${cf['monthly_income']:,.0f}, "
+        f"📅 Monthly ({cf.get('pay_cadence','')}): income ~${cf.get('total_income_est',0):,.0f} "
+        f"(salary ${cf['monthly_income']:,.0f} + RSU/other ${cf.get('est_other_income',0):,.0f}), "
         f"spend ~${cf['monthly_spend']:,.0f}",
-        f"💰 Saving ~${cf.get('monthly_investable_estimate',0):,.0f}/mo "
-        f"(${cf.get('monthly_to_savings',0):,.0f} to savings + ${cf.get('est_401k_monthly',0):,.0f} 401k) "
-        f"= {sr:.0f}% rate",
+        f"💰 Saving ~${cf.get('monthly_to_savings',0):,.0f}/mo to savings = {sr:.0f}% rate",
     ]
     if em is not None:
         lines.append(f"🛟 Emergency fund: {em:.1f} months")

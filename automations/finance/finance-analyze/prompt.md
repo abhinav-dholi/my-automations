@@ -4,14 +4,22 @@ own anonymized data.
 
 ## Tools you may use
 - `python3 lib/py/finance_cli.py features` — anonymized aggregates as JSON:
-  - `cashflow` (median monthly income/spend, avg_monthly_spend, savings_rate,
-    monthly_investable_estimate, excluded_movement_total)
+  - `cashflow` (monthly_income=take-home salary, est_other_income=RSU/bonus,
+    total_income_est, monthly_spend, monthly_to_savings, savings_rate =
+    saved/(saved+spent), take_home_surplus_rate, pay_cadence). After-tax; the
+    401(k) is pre-tax/locked and NOT modeled.
   - `months_analyzed`, `monthly_series` {YYYY-MM: {income, spend}} for trends
   - `spend_by_category_monthly` (avg per month)
   - `resilience` (liquid_cash, emergency_fund_months)
-  - `portfolio` (invested_total, holdings[symbol, pct_of_portfolio, gain_pct], top_concentration_pct)
-  - `allocation` (investable_base, current{equity,bonds,cash}, target{...})
-  - `net_worth`, `splitwise`, `profile`
+  - `net_worth`, `net_worth_breakdown` (liquid_cash, taxable_investments,
+    retirement_locked, credit_debt), `investable_cash` (deployable now)
+  - `portfolio` (controllable_total, taxable_value, retirement_value,
+    holdings[symbol,name,pct_of_taxable,pct_of_controllable,gain_pct], top_concentration_pct)
+  - `allocation` (over CONTROLLABLE = cash + taxable, EXCLUDING locked 401k:
+    investable_base, current{equity,bonds,cash}, target{...})
+  - `accounts` (name, type, role), `splitwise`, `profile`
+  IMPORTANT: advise only on INVESTABLE CASH + taxable holdings. The 401(k)/HSA
+  are locked retirement — note them but do not recommend touching or modeling them.
 - `python3 lib/py/finance_cli.py window --days N` — exact raw totals over N days.
 - `python3 lib/py/finance_cli.py store-insight --agent finance-analyze --json '<JSON>'`
 - `python3 lib/py/finance_cli.py notify '<text>'`

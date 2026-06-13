@@ -121,81 +121,102 @@ def donut(labels, values, title=""):
 
 # --- pages --------------------------------------------------------------
 
+def _refresh_all():
+    for step, label in [("finance-sync", "bank"), ("splitwise-sync", "Splitwise"),
+                        ("finance-categorize", "AI-categorize"), ("market-data-sync", "prices/macro")]:
+        _run_cli(["cli/auto", "run", step], f"Refreshing {label}…")
+    st.cache_data.clear()
+
+
 def page_overview():
-    st.title("Overview")
+    head, btn = st.columns([4, 1])
+    head.title("💰 My Money")
     if not _has_data():
-        st.info("No finance data yet. Run `finance-sync` first.")
-        return
+        st.info("No finance data yet. Run `finance-sync` first."); return
+    if btn.button("🔄 Refresh all", help="Pull bank + Splitwise, AI-categorize, update prices/macro"):
+        _refresh_all(); st.rerun()
+
     f = get_features()
     db = load_finance_db()
-    cf, res, port = f["cashflow"], f["resilience"], f["portfolio"]
-
+    cf, res = f["cashflow"], f["resilience"]
+    nb = f["net_worth_breakdown"]
     n_mo = f.get("months_analyzed", 0)
-    c = st.columns(6)
+
+    # ── Top line: net worth + the money buckets ──
+    c = st.columns(5)
     c[0].metric("Net worth", _money(f["net_worth"]))
-    c[1].metric("Monthly income", _money(cf["monthly_income"]),
-                help=f"Run-rate over {n_mo} complete month(s). Pay cadence: {cf.get('pay_cadence','?')}.")
-    c[2].metric("Monthly spend", _money(cf["monthly_spend"]),
-                help=f"Run-rate over {n_mo} month(s); typical month "
-                     f"{_money(cf.get('typical_month_spend'))} (median, ignores spikes).")
-    c[3].metric("Savings rate", f"{cf['savings_rate']*100:.0f}%",
-                help=f"Money actually saved: ~{_money(cf.get('monthly_to_savings'))}/mo into "
-                     f"savings/brokerage + ~{_money(cf.get('est_401k_monthly'))}/mo pre-tax 401(k), "
-                     f"over take-home + 401(k). Take-home surplus alone: {cf.get('take_home_surplus_rate',0)*100:.0f}%.")
-    c[4].metric("Saved / mo", _money(cf["monthly_investable_estimate"]))
-    em = res.get("emergency_fund_months")
-    c[5].metric("Emergency fund", f"{em:.1f} mo" if em is not None else "—")
-    st.caption(f"Savings rate counts net transfers to savings (~{_money(cf.get('monthly_to_savings'))}/mo) "
-               f"+ pre-tax 401(k) (~{_money(cf.get('est_401k_monthly'))}/mo). Income is "
-               f"{cf.get('pay_cadence','?')}; estimated from bank flows."
-               + ("  ⚠️ <2 complete months — firms up over time." if n_mo < 2 else ""))
+    c[1].metric("💵 Investable cash", _money(f["investable_cash"]), help="Liquid cash you can deploy now (excl. locked 401k).")
+    c[2].metric("📈 Taxable invest", _money(nb["taxable_investments"]))
+    c[3].metric("🔒 Retirement (locked)", _money(nb["retirement_locked"]), help="401(k)/HSA — not counted as investable.")
+    c[4].metric("💳 Card debt", _money(abs(nb["credit_debt"])))
 
-    left, right = st.columns([3, 2])
+    # ── Monthly money flow (reconciled) ──
+    st.divider()
+    st.subheader("Monthly money flow")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Income", _money(cf["total_income_est"]),
+              help=f"Salary {_money(cf['monthly_income'])} ({cf.get('pay_cadence','')}) + "
+                   f"non-salary/RSU ~{_money(cf['est_other_income'])}.")
+    m2.metric("Spend", _money(cf["monthly_spend"]), help=f"Typical month {_money(cf.get('typical_month_spend'))} (median).")
+    m3.metric("Saved", _money(cf["monthly_to_savings"]), help="Net cash moved into savings/brokerage.")
+    m4.metric("Savings rate", f"{cf['savings_rate']*100:.0f}%", help="Saved ÷ (saved + spent). After-tax; 401(k) not modeled.")
+    st.caption(f"Of every dollar you deploy, **{cf['savings_rate']*100:.0f}% is saved**. Salary is "
+               f"{cf.get('pay_cadence','')}; ~{_money(cf['est_other_income'])}/mo is non-salary income (RSU/bonus). "
+               f"Emergency fund: **{res.get('emergency_fund_months','—')} months** of spend in liquid cash."
+               + ("  ⚠️ only %d complete month(s) of history — firms up over time." % n_mo if n_mo < 2 else ""))
+
+    # ── Net worth composition + allocation vs target ──
+    left, right = st.columns(2)
     with left:
-        st.subheader("Net worth trend")
-        # Net worth = sum of all account balances (investment balances already
-        # include holdings — adding holdings again would double-count).
-        bs = pd.DataFrame(db["bal_series"]).rename(columns={"total": "net worth"})
-        if not bs.empty:
-            m = bs.sort_values("as_of").copy()
-            m["t"] = pd.to_datetime(m["as_of"], errors="coerce")
-            fig = px.area(m, x="t", y="net worth", template=PLOT_TEMPLATE,
-                          color_discrete_sequence=[ACCENT])
-            fig.update_layout(height=340, margin=dict(t=20, b=10, l=10, r=10),
-                              xaxis_title=None, yaxis_title=None)
-            st.plotly_chart(fig, use_container_width=True)
-            if len(m) < 2:
-                st.caption("Trend builds as `finance-sync` runs over time (one point so far).")
+        st.subheader("Where your money is")
+        comp = [("Liquid cash", nb["liquid_cash"]), ("Taxable invest", nb["taxable_investments"]),
+                ("Retirement (locked)", nb["retirement_locked"])]
+        comp = [(l, v) for l, v in comp if v > 0]
+        if comp:
+            st.plotly_chart(donut([l for l, _ in comp], [v for _, v in comp]), use_container_width=True)
     with right:
-        st.subheader("Asset mix")
-        liquid = res.get("liquid_cash", 0) or 0
-        invested = port.get("invested_total", 0) or 0
-        sw_net = sum(v for v in f["splitwise"]["net_balance_by_currency"].values())
-        labels, vals = [], []
-        for lbl, v in [("Liquid cash", liquid), ("Investments", invested),
-                       ("Splitwise (net)", max(sw_net, 0))]:
-            if v > 0:
-                labels.append(lbl); vals.append(v)
-        if vals:
-            st.plotly_chart(donut(labels, vals), use_container_width=True)
+        st.subheader("Investable allocation vs target")
+        st.caption("Cash + taxable holdings you control (excludes locked 401k).")
+        cur, tgt = f["allocation"]["current"], f["allocation"]["target"]
+        keys = ["equity", "bonds", "cash"]
+        fig = go.Figure([
+            go.Bar(name="Current", x=keys, y=[cur.get(k, 0)*100 for k in keys], marker_color=ACCENT),
+            go.Bar(name="Target", x=keys, y=[tgt.get(k, 0)*100 for k in keys], marker_color="#22c55e"),
+        ])
+        fig.update_layout(template=PLOT_TEMPLATE, barmode="group", height=300, yaxis_title="%",
+                          margin=dict(t=10, b=10, l=10, r=10))
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Income vs spend by month")
-    series = f.get("monthly_series", {})
-    if series:
-        sdf = pd.DataFrame([
-            {"month": m, "Income": v["income"], "Spend": v["spend"]}
-            for m, v in sorted(series.items())
-        ])
-        bar = go.Figure([
-            go.Bar(name="Income", x=sdf["month"], y=sdf["Income"], marker_color="#22c55e"),
-            go.Bar(name="Spend", x=sdf["month"], y=sdf["Spend"], marker_color="#ef4444"),
-        ])
-        bar.update_layout(template=PLOT_TEMPLATE, barmode="group", height=300,
-                          margin=dict(t=20, b=10, l=10, r=10), xaxis_title=None, yaxis_title=None)
-        st.plotly_chart(bar, use_container_width=True)
-    st.caption(f"Headline figures are the **median** of complete months (current + any partial "
-               f"start month excluded). Spend also excludes {_money(cf.get('excluded_movement_total',0))} "
-               "of transfers / card payments / investment moves.")
+    # ── Income vs spend by month + spend by category ──
+    left2, right2 = st.columns(2)
+    with left2:
+        st.subheader("Income vs spend by month")
+        series = f.get("monthly_series", {})
+        if series:
+            sdf = pd.DataFrame([{"month": m, "Income": v["income"], "Spend": v["spend"]}
+                                for m, v in sorted(series.items())])
+            bar = go.Figure([
+                go.Bar(name="Income", x=sdf["month"], y=sdf["Income"], marker_color="#22c55e"),
+                go.Bar(name="Spend", x=sdf["month"], y=sdf["Spend"], marker_color="#ef4444"),
+            ])
+            bar.update_layout(template=PLOT_TEMPLATE, barmode="group", height=300,
+                              margin=dict(t=10, b=10, l=10, r=10), xaxis_title=None, yaxis_title=None)
+            st.plotly_chart(bar, use_container_width=True)
+    with right2:
+        st.subheader("Spend by category (typical month)")
+        sbc = f.get("spend_by_category_monthly", {})
+        if sbc:
+            st.plotly_chart(donut(list(sbc)[:8], [sbc[k] for k in list(sbc)[:8]]), use_container_width=True)
+
+    # ── Splitwise + concentration callout ──
+    swn = sum(f["splitwise"]["net_balance_by_currency"].values()) if f["splitwise"]["net_balance_by_currency"] else 0
+    conc = f["portfolio"]["top_concentration_pct"]
+    s1, s2 = st.columns(2)
+    s1.metric("🤝 Splitwise net", _money(swn), help="+ owed to you")
+    s2.metric("⚠️ Top single-stock", f"{conc*100:.0f}% of investable",
+              help="Largest single holding as % of cash + taxable investments.")
+    st.caption(f"Updated {f.get('generated_at','')[:16].replace('T',' ')}. Tabs at left break down "
+               "Spending, Accounts, Investments, Splitwise, Market, and the AI Analysis / Council.")
 
 
 def page_spending():
