@@ -75,6 +75,23 @@ CREATE TABLE IF NOT EXISTS market_prices (
     close REAL,
     PRIMARY KEY (symbol, date)
 );
+CREATE TABLE IF NOT EXISTS macro_series (
+    series TEXT,
+    date TEXT,
+    value REAL,
+    label TEXT,
+    PRIMARY KEY (series, date)
+);
+CREATE TABLE IF NOT EXISTS market_news (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fetched_at TEXT,
+    source TEXT,
+    headline TEXT,
+    summary TEXT,
+    url TEXT,
+    tickers TEXT,
+    relevance TEXT
+);
 CREATE TABLE IF NOT EXISTS sync_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT,
@@ -229,6 +246,57 @@ def upsert_splitwise_expense(conn, *, id, date, description, currency, cost,
 
 
 # --- reads --------------------------------------------------------------
+
+def upsert_market_price(conn, *, symbol, date, close) -> None:
+    conn.execute("INSERT OR REPLACE INTO market_prices (symbol,date,close) VALUES (?,?,?)",
+                 (symbol, date, close))
+
+
+def upsert_macro(conn, *, series, date, value, label="") -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO macro_series (series,date,value,label) VALUES (?,?,?,?)",
+        (series, date, value, label),
+    )
+
+
+def add_news(conn, *, source, headline, summary, url, tickers, relevance) -> None:
+    conn.execute(
+        """INSERT INTO market_news (fetched_at,source,headline,summary,url,tickers,relevance)
+           VALUES (?,?,?,?,?,?,?)""",
+        (_now(), source, headline, summary, url, json.dumps(tickers or []), relevance),
+    )
+
+
+def held_symbols(conn) -> list[str]:
+    rows = conn.execute(
+        """SELECT DISTINCT symbol FROM holdings h
+           WHERE h.as_of=(SELECT MAX(as_of) FROM holdings WHERE account_id=h.account_id AND symbol=h.symbol)
+             AND symbol != ''""",
+    ).fetchall()
+    return [r["symbol"] for r in rows]
+
+
+def latest_prices(conn) -> list:
+    return conn.execute(
+        """SELECT symbol, close, date FROM market_prices p
+           WHERE date=(SELECT MAX(date) FROM market_prices WHERE symbol=p.symbol)
+           ORDER BY symbol""",
+    ).fetchall()
+
+
+def latest_macro(conn) -> list:
+    return conn.execute(
+        """SELECT series, value, label, date FROM macro_series m
+           WHERE date=(SELECT MAX(date) FROM macro_series WHERE series=m.series)
+           ORDER BY series""",
+    ).fetchall()
+
+
+def recent_news(conn, limit: int = 20) -> list:
+    return conn.execute(
+        "SELECT * FROM market_news ORDER BY id DESC LIMIT ?", (limit,),
+    ).fetchall()
+
 
 def splitwise_net(conn) -> dict[str, float]:
     """Latest net Splitwise balance per currency (+ == owed to me)."""

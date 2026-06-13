@@ -1,0 +1,16 @@
+id: market-data-sync
+category: finance
+description: Fetch prices (held tickers + benchmarks) via Finnhub and macro indicators via FRED into the local datastore.
+runtime: python
+entry: main.py
+triggers:
+  - cli
+  - schedule
+  - skill
+schedule: "0 17 * * 1-5"      # weekdays 17:00 LOCAL (after US market close)
+tz: America/New_York
+secrets:
+  - FINNHUB_API_KEY
+  - FRED_API_KEY
+deploy:
+  target: local-cron

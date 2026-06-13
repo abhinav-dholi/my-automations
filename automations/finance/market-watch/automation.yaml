@@ -1,0 +1,21 @@
+id: market-watch
+category: finance
+description: Claude gathers market-moving news (holdings + indices + macro) from the web and stores a sourced market brief.
+runtime: claude
+entry: prompt.md
+triggers:
+  - cli
+  - schedule
+  - skill
+schedule: "0 8,16 * * 1-5"    # weekdays 08:00 + 16:00 LOCAL
+tz: America/New_York
+secrets:
+  - CLAUDE_CODE_OAUTH_TOKEN
+allowed_tools:
+  - "WebSearch"
+  - "WebFetch"
+  - "Bash(python3 lib/py/market_cli.py tickers:*)"
+  - "Bash(python3 lib/py/market_cli.py store-news:*)"
+  - "Bash(python3 lib/py/market_cli.py write-brief:*)"
+deploy:
+  target: local-cron
