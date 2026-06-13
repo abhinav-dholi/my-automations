@@ -163,15 +163,37 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
         return
 
 
+OFFSET_FILE = config.DATA_DIR / "telegram_offset"
+
+
+def _load_offset():
+    try:
+        return int(OFFSET_FILE.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _save_offset(offset: int) -> None:
+    try:
+        config.ensure_runtime_dirs()
+        OFFSET_FILE.write_text(str(offset))
+    except OSError:
+        pass
+
+
 def main() -> None:
     token = secrets_store.get("TELEGRAM_TOKEN")
     chat_id = str(secrets_store.get("TELEGRAM_CHAT_ID"))
 
-    # Skip backlog: start from the latest update id.
-    offset = None
-    init = _api(token, "getUpdates", timeout=0)
-    if init.get("ok") and init.get("result"):
-        offset = init["result"][-1]["update_id"] + 1
+    # Resume from the saved position so commands sent while the Mac was asleep
+    # are processed on wake (no loss, no replay). Only on a true first run do we
+    # skip backlog, to avoid replaying ancient history.
+    offset = _load_offset()
+    if offset is None:
+        init = _api(token, "getUpdates", timeout=0)
+        if init.get("ok") and init.get("result"):
+            offset = init["result"][-1]["update_id"] + 1
+            _save_offset(offset)
 
     _send(token, chat_id, "🤖 my-automations bot online. /help for commands.")
     print("[telegram-bot] online, polling…")
@@ -186,6 +208,7 @@ def main() -> None:
 
         for upd in resp.get("result", []):
             offset = upd["update_id"] + 1
+            _save_offset(offset)
             msg = upd.get("message") or upd.get("edited_message") or {}
             from_chat = str((msg.get("chat") or {}).get("id", ""))
             text = msg.get("text", "")
