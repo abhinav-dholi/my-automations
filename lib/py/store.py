@@ -102,6 +102,13 @@ CREATE TABLE IF NOT EXISTS sync_runs (
     n_transactions INTEGER,
     note TEXT
 );
+CREATE TABLE IF NOT EXISTS balance_overrides (
+    account_id TEXT PRIMARY KEY,
+    override_balance REAL,   -- the correct balance to use
+    stale_balance REAL,      -- the synced value this override corrects
+    created_at TEXT,
+    note TEXT
+);
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT,
@@ -438,13 +445,44 @@ def transactions_between(conn, start_unix: int, end_unix: int) -> list[sqlite3.R
     ).fetchall()
 
 
-def latest_balances(conn) -> list[sqlite3.Row]:
-    return conn.execute(
+def set_balance_override(conn, *, account_id, override_balance, stale_balance, note="") -> None:
+    conn.execute(
+        """INSERT OR REPLACE INTO balance_overrides
+           (account_id,override_balance,stale_balance,created_at,note) VALUES (?,?,?,?,?)""",
+        (account_id, override_balance, stale_balance, _now(), note),
+    )
+
+
+def clear_balance_override(conn, account_id: str) -> None:
+    conn.execute("DELETE FROM balance_overrides WHERE account_id=?", (account_id,))
+
+
+def latest_balances(conn) -> list[dict]:
+    """Latest balance per account, with manual corrections applied. An override
+    is honored only while the SYNCED balance still equals the stale value it
+    corrected — once the bank reports anything else, the real value wins
+    (auto-heals stale-feed double-counts, e.g. a transfer credited but not yet
+    debited at the source)."""
+    rows = [dict(r) for r in conn.execute(
         """SELECT a.id, a.name, a.type, b.balance, b.as_of FROM accounts a
            JOIN balances b ON b.account_id=a.id
            WHERE b.as_of = (SELECT MAX(as_of) FROM balances WHERE account_id=a.id)
-           ORDER BY a.name""",
-    ).fetchall()
+           ORDER BY a.name""").fetchall()]
+    overrides = {r["account_id"]: r for r in conn.execute("SELECT * FROM balance_overrides")}
+    obsolete = []
+    for r in rows:
+        o = overrides.get(r["id"])
+        if o is None:
+            continue
+        if abs(r["balance"] - o["stale_balance"]) < 0.01:   # bank still stale → use correction
+            r["synced_balance"] = r["balance"]
+            r["balance"] = o["override_balance"]
+            r["overridden"] = True
+        else:
+            obsolete.append(r["id"])                        # bank updated → drop override
+    for aid in obsolete:
+        clear_balance_override(conn, aid)
+    return rows
 
 
 def latest_holdings(conn) -> list[sqlite3.Row]:

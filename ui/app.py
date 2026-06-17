@@ -409,6 +409,33 @@ def page_accounts():
     st.dataframe(bal[["name", "type", "balance"]].sort_values("balance", ascending=False),
                  use_container_width=True, hide_index=True)
 
+    over = [r for r in db["balances"] if r.get("overridden")]
+    if over:
+        st.info("✏️ Active balance corrections (auto-clear when the bank's feed changes): "
+                + ", ".join(f"**{r['name']}** → {_money(r['balance'])} "
+                            f"(feed says {_money(r.get('synced_balance'))})" for r in over))
+
+    with st.expander("✏️ Correct a balance (stale bank feed)"):
+        st.caption("Use this when a synced balance is wrong — e.g. a transfer was credited to "
+                   "one account but not yet debited from the source, so money is double-counted. "
+                   "Your correction applies until the bank's feed changes, then auto-clears.")
+        opts = {r["id"]: r for r in db["balances"]}
+        aid = st.selectbox("Account", list(opts),
+                           format_func=lambda i: f"{opts[i]['name']} — feed: "
+                           f"{_money(opts[i].get('synced_balance', opts[i]['balance']))}")
+        synced = float(opts[aid].get("synced_balance", opts[aid]["balance"]))
+        correct = st.number_input("Correct balance ($)", value=synced, step=100.0, format="%.2f")
+        b1, b2 = st.columns(2)
+        if b1.button("💾 Save correction", type="primary"):
+            with store.connect() as conn:
+                store.set_balance_override(conn, account_id=aid, override_balance=correct,
+                                           stale_balance=synced, note="manual UI correction")
+            st.cache_data.clear(); st.success("Correction saved."); st.rerun()
+        if b2.button("↩️ Clear correction"):
+            with store.connect() as conn:
+                store.clear_balance_override(conn, aid)
+            st.cache_data.clear(); st.rerun()
+
 
 def page_investments():
     st.title("Investments")
