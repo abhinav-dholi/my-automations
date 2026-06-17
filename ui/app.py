@@ -441,47 +441,89 @@ def page_investments():
     st.title("Investments")
     if not _has_data():
         st.info("No data yet."); return
-    db = load_finance_db()
-    h = pd.DataFrame(db["holdings"])
-    if h.empty:
-        st.info("No holdings synced. (SimpleFIN exposes these for investment accounts.)"); return
+    import features as _feat
+    f = get_features(); db = load_finance_db()
+    port, nb = f["portfolio"], f["net_worth_breakdown"]
 
-    # Only count holdings in funded investment accounts (balance > 0). Excludes
-    # unvested / $0-balance accounts (e.g. equity awards) that overstate value.
-    bal = pd.DataFrame(db["balances"])
-    funded = set(bal[(bal["type"] == "investment") & (bal["balance"] > 0)]["id"]) if not bal.empty else set()
-    excluded = h[~h["account_id"].isin(funded)]
-    h = h[h["account_id"].isin(funded)]
-    if h.empty:
-        st.info("No funded investment holdings. (Unvested/equity-award holdings are excluded.)"); return
+    if not db["holdings"]:
+        st.info("No holdings synced yet."); return
 
-    total_val = h["market_value"].sum()
-    total_cost = h["cost_basis"].sum()
-    gain = total_val - total_cost
-    c = st.columns(3)
-    c[0].metric("Portfolio value", _money(total_val))
-    c[1].metric("Cost basis", _money(total_cost))
-    c[2].metric("Unrealized gain", _money(gain),
-                f"{(gain/total_cost*100):.1f}%" if total_cost else None)
+    # ── Per-holding detail (every account, incl. vested equity awards) ──
+    accts = {b["id"]: (b["name"], b["type"]) for b in db["balances"]}
+    rows = []
+    for h in db["holdings"]:
+        nm, ty = accts.get(h["account_id"], ("?", "?"))
+        role = _feat._acct_role(nm, ty)
+        gain = (h["market_value"] or 0) - (h["cost_basis"] or 0)
+        gpct = (gain / h["cost_basis"] * 100) if h["cost_basis"] else None
+        retire = "401" in nm.lower() or "ira" in nm.lower() or "hsa" in nm.lower() or "health savings" in nm.lower()
+        rows.append({"Symbol": h["symbol"], "Holding": h["name"], "Account": _feat._clean_acct(nm),
+                     "Bucket": "Locked (retirement)" if retire else "Taxable / vested",
+                     "Value": h["market_value"] or 0, "Cost": h["cost_basis"] or 0,
+                     "Gain $": gain, "Gain %": round(gpct, 1) if gpct is not None else None,
+                     "Qty": h["quantity"]})
+    hdf = pd.DataFrame(rows)
+    taxable_df = hdf[hdf["Bucket"] == "Taxable / vested"]
+    taxable_gain = taxable_df["Gain $"].sum()
+    taxable_cost = taxable_df["Cost"].sum()
 
-    left, right = st.columns([2, 3])
+    # ── KPIs ──
+    c = st.columns(5)
+    c[0].metric("📈 Taxable + vested", _money(nb["taxable_investments"]),
+                help="What you can rebalance / sell.")
+    c[1].metric("🔒 Retirement (locked)", _money(nb["retirement_locked"]),
+                help="401(k)/HSA — diversified, left alone.")
+    c[2].metric("Unrealized gain (taxable)", _money(taxable_gain),
+                f"{taxable_gain/taxable_cost*100:.1f}%" if taxable_cost else None)
+    c[3].metric("💵 Investable surplus", _money(f.get("investable_surplus", 0)),
+                help="Cash beyond your emergency reserve — free to deploy.")
+    c[4].metric("⚠️ Top concentration", f"{port['top_concentration_pct']*100:.0f}%",
+                help="Largest single holding as % of cash + taxable investments.")
+
+    # ── Allocation vs target (controllable) ──
+    left, right = st.columns([3, 2])
     with left:
-        st.subheader("Allocation")
-        st.plotly_chart(donut(list(h["symbol"]), list(h["market_value"])), use_container_width=True)
+        st.subheader("Investable allocation vs target")
+        st.caption("Across cash + taxable holdings you control (excludes the locked 401k).")
+        cur, tgt = f["allocation"]["current"], f["allocation"]["target"]
+        keys = ["equity", "bonds", "cash"]
+        fig = go.Figure([
+            go.Bar(name="Current", x=keys, y=[cur.get(k, 0)*100 for k in keys], marker_color=ACCENT),
+            go.Bar(name="Target", x=keys, y=[tgt.get(k, 0)*100 for k in keys], marker_color="#22c55e"),
+        ])
+        fig.update_layout(template=PLOT_TEMPLATE, barmode="group", height=320, yaxis_title="%",
+                          margin=dict(t=10, b=10, l=10, r=10))
+        st.plotly_chart(fig, use_container_width=True)
     with right:
-        st.subheader("Holdings")
-        h2 = h.copy()
-        gain_pct = ((h2["market_value"] - h2["cost_basis"]) /
-                    h2["cost_basis"].replace(0, pd.NA) * 100)
-        h2["gain %"] = pd.to_numeric(gain_pct, errors="coerce").round(1)
-        st.dataframe(
-            h2[["symbol", "quantity", "market_value", "cost_basis", "gain %"]],
-            use_container_width=True, hide_index=True,
-        )
-    if not excluded.empty:
-        st.caption(f"Excluded {len(excluded)} unvested/\\$0-balance holding(s) "
-                   f"(${excluded['market_value'].sum():,.0f}) from invested totals.")
-    st.caption("Concentration in a single holding is a key risk the analysis flags.")
+        st.subheader("Holdings mix")
+        agg = hdf.groupby("Symbol")["Value"].sum().sort_values(ascending=False)
+        st.plotly_chart(donut(list(agg.index), list(agg.values)), use_container_width=True)
+
+    # ── Concentration insight ──
+    if port["top_concentration_pct"] > 0.2 and port.get("holdings"):
+        top = port["holdings"][0]
+        st.warning(f"⚠️ **{top['symbol']}** is **{top['pct_of_taxable']*100:.0f}% of your taxable "
+                   f"investments** and {top['pct_of_controllable']*100:.0f}% of investable assets"
+                   + (f" (down {abs(top['gain_pct'])*100:.0f}%)" if top.get('gain_pct') and top['gain_pct'] < 0 else "")
+                   + " — a single-stock concentration the analysis/council flag for diversification.")
+
+    # ── All holdings table ──
+    st.subheader("All holdings")
+    money_col = st.column_config.NumberColumn(format="$%.0f")
+    st.dataframe(hdf.sort_values("Value", ascending=False),
+                 use_container_width=True, hide_index=True,
+                 column_config={"Value": money_col, "Cost": money_col, "Gain $": money_col,
+                                "Gain %": st.column_config.NumberColumn(format="%.1f%%"),
+                                "Qty": st.column_config.NumberColumn(format="%.2f")})
+
+    # ── By account ──
+    st.subheader("By account")
+    byacct = (hdf.groupby(["Account", "Bucket"])["Value"].sum().reset_index()
+              .sort_values("Value", ascending=False))
+    st.dataframe(byacct, use_container_width=True, hide_index=True,
+                 column_config={"Value": money_col})
+    st.caption("Taxable/vested = rebalanceable now. Locked (401k/HSA) = retirement, left alone. "
+               "Vested equity-award stock is counted even when the account shows \\$0 cash.")
 
 
 def page_splitwise():
