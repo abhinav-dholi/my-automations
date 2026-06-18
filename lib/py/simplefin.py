@@ -11,11 +11,15 @@ callers can stop and notify rather than retry (§11.4).
 from __future__ import annotations
 
 import base64
+import time
 from dataclasses import dataclass
 
 import requests
 
 import scrub
+
+HTTP_TIMEOUT = 120        # SimpleFIN can be slow under load
+RETRIES = 3               # transient timeouts shouldn't fail the whole sync
 
 
 class TokenRevoked(Exception):
@@ -74,7 +78,20 @@ def get_accounts(access_url: str, start: int, end: int,
     if pending:
         params["pending"] = 1
 
-    resp = requests.get(f"{access_url}/accounts", params=params, timeout=60)
+    # Retry transient network errors / slow responses with backoff so a single
+    # slow SimpleFIN call doesn't fail the whole scheduled sync.
+    last_err = None
+    for attempt in range(RETRIES):
+        try:
+            resp = requests.get(f"{access_url}/accounts", params=params, timeout=HTTP_TIMEOUT)
+            break
+        except requests.exceptions.RequestException as e:
+            last_err = e
+            if attempt < RETRIES - 1:
+                time.sleep(3 * (attempt + 1))
+    else:
+        raise RuntimeError(scrub.clean(f"SimpleFIN unreachable after {RETRIES} tries: {last_err}"))
+
     if resp.status_code == 403:
         raise TokenRevoked("SimpleFIN returned 403 — Access URL revoked/compromised.")
     if resp.status_code == 402:
