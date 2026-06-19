@@ -9,7 +9,7 @@ See [PRD.md](PRD.md) for the full design and [CLAUDE.md](CLAUDE.md) for conventi
 
 ---
 
-## 💰 The Financial Intelligence System
+## 💰 My Financial Intelligence
 
 Aggregates your banks, cards, investments, shared expenses, and markets into a
 **local-first**, **cash-honest**, **self-reconciling** picture of your money — with
