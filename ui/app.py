@@ -50,7 +50,7 @@ PALETTE = px.colors.qualitative.Set2
 # Category choices for manual edits (rule categories + money-movement + misc).
 CATEGORIES = sorted(set(
     [c for c, _ in finance_rules.CATEGORY_RULES]
-    + list(finance_rules.NON_SPEND) + ["Other", "Uncategorized"]
+    + list(finance_rules.NON_SPEND) + ["Reimbursement", "Other", "Uncategorized"]
 ))
 
 
@@ -188,23 +188,49 @@ def page_overview():
         st.warning(_md(f"🪙 **Investable surplus: $0** — still building the {tgt:.0f}-month essentials "
                    f"reserve ({em} of {tgt:.0f} mo; ~{_money(gap)} to go). Finish it before investing cash."))
 
-    # ── Monthly money flow (reconciled) ──
+    # ── Monthly cash flow (reconciling waterfall — every line adds up) ──
     st.divider()
-    st.subheader("Monthly money flow (typical month)")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Income", _money(cf["total_income_est"]),
-              help=f"Salary {_money(cf['monthly_income'])} ({cf.get('pay_cadence','')}) + "
-                   f"non-salary/RSU ~{_money(cf['est_other_income'])}.")
-    m2.metric("Spend", _money(cf["monthly_spend"]), help=f"Typical month {_money(cf.get('typical_month_spend'))} (median).")
-    m3.metric("Saved", _money(cf["monthly_to_savings"]), help="Net cash moved into savings/brokerage.")
-    m4.metric("Savings rate", f"{cf['savings_rate']*100:.0f}%", help="Saved ÷ (saved + spent). After-tax; 401(k) not modeled.")
-    st.caption(_md(f"Of every dollar you deploy, **{cf['savings_rate']*100:.0f}% is saved**. Salary is "
-               f"{cf.get('pay_cadence','')}; ~{_money(cf['est_other_income'])}/mo is non-salary income (RSU/bonus). "
-               f"Emergency fund: **{res.get('emergency_fund_months','—')} months of essentials** covered.")
-               + ("  ⚠️ only %d complete month(s) of history — firms up over time." % n_mo if n_mo < 2 else ""))
-    st.caption(f"ℹ︎ Typical-month figures are the median/run-rate over **{n_mo} complete calendar "
-               "month(s)**; the current month is excluded so a partial month doesn't skew them "
-               "(they update when the month closes). Live current-month activity is below 👇")
+    st.subheader("Monthly cash flow (typical month)")
+    surplus = cf["operating_cash_surplus"]
+    netreimb = cf.get("net_reimbursements", 0)
+    rate = cf["operating_surplus_rate"] * 100
+
+    def _sgn(v):
+        return f"+{_money(v)}" if v >= 0 else f"−{_money(abs(v))}"
+
+    left, right = st.columns([3, 2])
+    with left:
+        rows = [("💰 Take-home salary (payroll)", cf["monthly_income"]),
+                ("🛒 Spending", -cf["monthly_spend"])]
+        if abs(netreimb) >= 1:
+            rows.append(("🔄 Net paid back to you (Zelle/Venmo)", netreimb))
+        tbl = "| Cash in / out | / month |\n|:--|--:|\n"
+        for lbl, v in rows:
+            tbl += f"| {lbl} | {_sgn(v)} |\n"
+        tbl += f"| **= Operating cash surplus** | **{_sgn(surplus)}** |\n"
+        st.markdown(_md(tbl))
+        st.caption("Every line is actual cash in/out of your accounts — it reconciles to the surplus.")
+    with right:
+        st.metric("Operating cash surplus", _money(surplus),
+                  delta=f"{rate:.0f}% of take-home",
+                  delta_color="normal" if surplus >= 0 else "inverse",
+                  help="The real recurring cash you keep: salary − spending + net reimbursements.")
+
+    # Building wealth / lumpy inflows — DELIBERATELY separate from the cash surplus.
+    onetime = cf.get("one_time_inflows_window", 0)
+    st.markdown("**Building wealth — separate from cash surplus (not spendable / not recurring):**")
+    w1, w2, w3 = st.columns(3)
+    w1.metric("🏦 Pre-tax 401(k)", _money(cf["monthly_pretax_retirement"]) + "/mo",
+              help="Retirement contributions — pre-tax, locked, not in take-home above.")
+    w2.metric("🎁 One-time inflows", _money(onetime),
+              help=f"Refunds/bonuses over the last {cf.get('complete_months',0)} mo — lumpy, not recurring.")
+    w3.metric("🤝 Splitwise (owed to you)",
+              _money(sum(f["splitwise"]["net_balance_by_currency"].values())
+                     if f["splitwise"]["net_balance_by_currency"] else 0),
+              help="A receivable — money friends owe you, separate from cash. Settled via Zelle/Venmo.")
+    st.caption(f"ℹ︎ Run-rate over **{n_mo} complete calendar month(s)** (current month excluded so a "
+               "partial month doesn't skew it). Live current-month activity is below 👇"
+               + ("  ⚠️ only %d complete month — firms up over time." % n_mo if n_mo < 2 else ""))
 
     # ── This month so far (live, current incomplete month) ──
     mtd = f.get("month_to_date") or {}
@@ -287,6 +313,12 @@ def page_spending():
     if df.empty:
         st.info("No transactions."); return
     df["date"] = pd.to_datetime(df["posted"], unit="s")
+    if not st.session_state.get("_flags_ready"):
+        store.init_db(); st.session_state["_flags_ready"] = True   # ensure txn_flags table
+    with store.connect() as _c:
+        _fl = store.txn_flags(_c)
+    df["one_time"] = df["id"].map(lambda i: _fl.get(i, {}).get("one_time", False))
+    df["exclude"] = df["id"].map(lambda i: _fl.get(i, {}).get("excluded", False))
 
     # Date-range picker.
     import time as _t
@@ -367,10 +399,11 @@ def page_spending():
                      use_container_width=True, height=300,
                      column_config={"Spent": st.column_config.NumberColumn(format="$%.0f")})
 
-    st.subheader("Transactions — edit categories")
+    st.subheader("Transactions — edit categories & tags")
     ec1, ec2 = st.columns([3, 1])
-    ec1.caption("Change a category and Save — manual edits override everything, are "
-                "remembered, and re-tag matching transactions. Or let AI categorize the rest.")
+    ec1.caption("Edit category, or tag a row: **one-time** keeps it in actuals/net worth but out "
+                "of your typical-month figures (e.g. family flights, moving costs); **exclude** drops "
+                "it from all analytics (a duplicate/error). Both persist across syncs.")
     if ec2.button("🤖 AI-categorize Other"):
         with st.spinner("Claude categorizing…"):
             res = subprocess.run([sys.executable, "cli/auto", "run", "finance-categorize"],
@@ -387,7 +420,8 @@ def page_spending():
     if q:
         view = view[view["description"].str.contains(q, case=False, na=False)]
 
-    editor_df = view[["id", "date", "description", "amount", "category"]].reset_index(drop=True)
+    editor_df = view[["id", "date", "description", "amount", "category",
+                      "one_time", "exclude"]].reset_index(drop=True)
     edited = st.data_editor(
         editor_df, hide_index=True, use_container_width=True, height=460,
         key="txn_editor",
@@ -397,13 +431,23 @@ def page_spending():
             "description": st.column_config.TextColumn("Description", disabled=True, width="large"),
             "amount": st.column_config.NumberColumn("Amount", disabled=True, format="$%.2f"),
             "category": st.column_config.SelectboxColumn("Category", options=CATEGORIES, required=True),
+            "one_time": st.column_config.CheckboxColumn("One-time", help="Keep in actuals, exclude from typical month"),
+            "exclude": st.column_config.CheckboxColumn("Exclude", help="Drop from all analytics (duplicate/error)"),
         },
     )
-    if st.button("💾 Save category changes", type="primary"):
+    if st.button("💾 Save changes", type="primary"):
         orig = dict(zip(editor_df["id"], editor_df["category"]))
         new = dict(zip(edited["id"], edited["category"]))
         changed = {i: c for i, c in new.items() if orig.get(i) != c}
-        if not changed:
+        # Persist flag changes (one-time / exclude).
+        of = dict(zip(editor_df["id"], zip(editor_df["one_time"], editor_df["exclude"])))
+        nf = dict(zip(edited["id"], zip(edited["one_time"], edited["exclude"])))
+        flag_changes = {i: nf[i] for i in nf if of.get(i) != nf[i]}
+        if flag_changes:
+            with store.connect() as conn:
+                for tid, (ot, ex) in flag_changes.items():
+                    store.set_txn_flags(conn, tid, one_time=bool(ot), excluded=bool(ex))
+        if not changed and not flag_changes:
             st.info("No changes to save.")
         else:
             desc_by_id = dict(zip(view["id"], view["description"]))
@@ -412,8 +456,12 @@ def page_spending():
                 for tid, cat in changed.items():
                     store.set_manual_category(conn, tid, cat)        # this txn (wins always)
                     retagged += store.learn_category(conn, desc_by_id.get(tid, ""), cat)  # learn + re-tag similar
-            st.success(f"Saved {len(changed)} edit(s); learned the merchant(s) and "
-                       f"re-tagged {retagged} matching transaction(s). Future syncs apply this automatically.")
+            parts = []
+            if changed:
+                parts.append(f"{len(changed)} category edit(s) (re-tagged {retagged} similar)")
+            if flag_changes:
+                parts.append(f"{len(flag_changes)} tag change(s)")
+            st.success("Saved " + " and ".join(parts) + ". Persists across syncs.")
             st.cache_data.clear()
             st.rerun()
 
@@ -448,6 +496,16 @@ def page_accounts():
     bal["institution"] = bal["institution"].fillna("").replace("", "Other")
     bal["kind"] = bal.apply(lambda r: _acct_kind(r), axis=1)
 
+    # Effective value = max(cash balance, holdings) for investment accounts, so an
+    # equity-award account that reports $0 cash but holds vested stock still counts.
+    # This is the SAME logic features uses for net worth — keeps the page reconciled.
+    hb: dict = {}
+    for h in (db.get("holdings") or []):
+        hb[h["account_id"]] = hb.get(h["account_id"], 0) + (h.get("market_value") or 0)
+    bal["value"] = bal.apply(
+        lambda r: max(r["balance"], hb.get(r["id"], 0)) if r["type"] == "investment"
+        else r["balance"], axis=1)
+
     aq = st.text_input("🔎 Search accounts", "",
                        placeholder="name, institution, or kind (e.g. brokerage, HYSA)…").lower().strip()
     if aq:
@@ -457,56 +515,65 @@ def page_accounts():
         if bal.empty:
             st.caption("No accounts match your search."); return
 
-    assets = bal[bal["balance"] > 0]["balance"].sum()
-    debts = bal[bal["balance"] < 0]["balance"].sum()
-    liquid = bal[bal["type"].isin(["checking", "savings"])]["balance"].sum()
+    assets = bal[bal["value"] > 0]["value"].sum()
+    debts = bal[bal["value"] < 0]["value"].sum()
+    liquid = bal[bal["type"].isin(["checking", "savings"])]["value"].sum()
+    sw_recv = sum(x.get("amount", 0) for x in (db.get("splitwise") or []))
+    net_worth = assets + debts + sw_recv
     c = st.columns(4)
-    c[0].metric("Total assets", _money(assets))
+    c[0].metric("Total assets", _money(assets + max(sw_recv, 0)),
+                help="Account values" + (f" + {_money(sw_recv)} Splitwise owed to you" if sw_recv > 0 else ""))
     c[1].metric("💵 Liquid cash", _money(liquid))
-    c[2].metric("Total debt", _money(debts))
-    c[3].metric("Net", _money(assets + debts))
+    c[2].metric("Total debt", _money(debts + min(sw_recv, 0)))
+    c[3].metric("Net worth", _money(net_worth),
+                help="Account values (investments use holdings value) ± Splitwise receivable. "
+                     "Matches the Overview net worth.")
+    if abs(sw_recv) >= 1:
+        st.caption(_md(f"Includes **{_money(sw_recv)}** net {'owed to you' if sw_recv>=0 else 'you owe'} "
+                       "on Splitwise (a receivable — money you fronted that returns to you)."))
 
     # ── Grouped by institution (card per bank) ──
     st.subheader("Accounts by institution")
-    order = (bal.groupby("institution")["balance"].sum()
+    order = (bal.groupby("institution")["value"].sum()
              .sort_values(ascending=False).index.tolist())
     cols = st.columns(2)
     for i, inst in enumerate(order):
-        g = bal[bal["institution"] == inst].sort_values("balance", ascending=False)
+        g = bal[bal["institution"] == inst].sort_values("value", ascending=False)
         with cols[i % 2].container(border=True):
-            st.markdown(f"**{inst}** · net {_money(g['balance'].sum())}")
+            st.markdown(f"**{inst}** · net {_money(g['value'].sum())}")
             for _, r in g.iterrows():
                 a, b = st.columns([5, 2])
+                note = " · _stock_" if r["type"] == "investment" and r["balance"] < 1 and r["value"] > 1 else ""
                 a.markdown(f"{_acct_icon(r)} {r['name']}  \n"
-                           f"<span style='color:#888;font-size:0.8em'>{r['kind']}</span>",
+                           f"<span style='color:#888;font-size:0.8em'>{r['kind']}{note}</span>",
                            unsafe_allow_html=True)
-                b.markdown(f"<div style='text-align:right'>{_money(r['balance'])}</div>",
+                b.markdown(f"<div style='text-align:right'>{_money(r['value'])}</div>",
                            unsafe_allow_html=True)
 
     # ── Charts ──
     left, right = st.columns([3, 2])
     with left:
-        st.subheader("Balances by account")
-        b = bal.sort_values("balance")
-        fig = px.bar(b, x="balance", y="name", orientation="h", template=PLOT_TEMPLATE,
-                     color="balance", color_continuous_scale=["#ef4444", "#22c55e"])
+        st.subheader("Value by account")
+        b = bal.sort_values("value")
+        fig = px.bar(b, x="value", y="name", orientation="h", template=PLOT_TEMPLATE,
+                     color="value", color_continuous_scale=["#ef4444", "#22c55e"])
         fig.update_layout(height=400, margin=dict(t=20, b=10, l=10, r=10),
                           xaxis_title=None, yaxis_title=None, coloraxis_showscale=False)
         st.plotly_chart(fig, use_container_width=True)
     with right:
         st.subheader("Assets by kind")
-        pos = bal[bal["balance"] > 0]
-        bykind = pos.groupby("kind")["balance"].sum()
+        pos = bal[bal["value"] > 0]
+        bykind = pos.groupby("kind")["value"].sum()
         st.plotly_chart(donut(list(bykind.index), list(bykind.values)), use_container_width=True)
 
     with st.expander("📋 All accounts (table)"):
         st.dataframe(
-            bal[["name", "institution", "kind", "type", "balance"]]
-            .sort_values("balance", ascending=False)
+            bal[["name", "institution", "kind", "type", "value"]]
+            .sort_values("value", ascending=False)
             .rename(columns={"name": "Account", "institution": "Institution",
-                             "kind": "Kind", "type": "Type", "balance": "Balance"}),
+                             "kind": "Kind", "type": "Type", "value": "Value"}),
             use_container_width=True, hide_index=True,
-            column_config={"Balance": st.column_config.NumberColumn(format="$%.2f")})
+            column_config={"Value": st.column_config.NumberColumn(format="$%.2f")})
 
     over = [r for r in db["balances"] if r.get("overridden")]
     if over:
@@ -1221,11 +1288,42 @@ def page_chat():
     if not _has_data():
         st.info("No finance data yet. Run `finance-sync` first."); return
 
+    if not st.session_state.get("_chat_db_ready"):
+        store.init_db()                       # ensure chat_messages table exists
+        st.session_state["_chat_db_ready"] = True
+
     hist = st.session_state.setdefault("chat_history", [])
-    top = st.columns([4, 1])
-    top[0].caption(f"{len([m for m in hist if m['role']=='user'])} question(s) this session.")
-    if top[1].button("🗑 Clear", use_container_width=True):
-        st.session_state["chat_history"] = []; st.rerun()
+    with store.connect() as conn:
+        past = store.list_chats(conn, 30)
+
+    top = st.columns([1, 3])
+    if top[0].button("🆕 New chat", use_container_width=True):
+        st.session_state["chat_history"] = []
+        st.session_state["conv_id"] = None
+        st.rerun()
+    top[1].caption(f"{len([m for m in hist if m['role']=='user'])} question(s) in this chat · "
+                   f"{len(past)} saved conversation(s). History persists across restarts.")
+
+    if past:
+        with st.expander(f"📚 Past chats ({len(past)})",
+                         expanded=not hist and bool(past)):
+            for p in past:
+                title = (p.get("title") or "Chat").strip().replace("\n", " ")[:60]
+                meta = f"{p.get('started','')[:10]} · {p.get('questions',0)} Q"
+                lc, dc = st.columns([6, 1])
+                if lc.button(f"{title}  ·  _{meta}_", key=f"load_{p['conv_id']}",
+                             use_container_width=True):
+                    with store.connect() as conn:
+                        st.session_state["chat_history"] = store.load_chat(conn, p["conv_id"])
+                    st.session_state["conv_id"] = p["conv_id"]
+                    st.rerun()
+                if dc.button("🗑", key=f"del_{p['conv_id']}", help="Delete this conversation"):
+                    with store.connect() as conn:
+                        store.delete_chat(conn, p["conv_id"])
+                    if st.session_state.get("conv_id") == p["conv_id"]:
+                        st.session_state["chat_history"] = []
+                        st.session_state["conv_id"] = None
+                    st.rerun()
 
     if not hist:
         st.markdown("**Try:**")
@@ -1254,13 +1352,57 @@ def page_chat():
     typed = st.chat_input("Ask about your finances… e.g. 'What did I spend on travel last month?'")
     user_msg = pending or typed
     if user_msg:
+        import time as _time
+        conv_id = st.session_state.get("conv_id") or f"chat-{int(_time.time())}"
+        st.session_state["conv_id"] = conv_id
         hist.append({"role": "user", "content": user_msg})
         with st.spinner("Thinking + crunching your numbers…"):
             import finance_chat
             res = finance_chat.chat(hist)
         hist.append({"role": "assistant", "content": res["answer"],
                      "charts": res.get("charts", []), "followups": res.get("followups", [])})
+        with store.connect() as conn:                # persist both turns
+            store.save_chat_message(conn, conv_id=conv_id, role="user", content=user_msg)
+            store.save_chat_message(conn, conv_id=conv_id, role="assistant",
+                                    content=res["answer"], charts=res.get("charts", []),
+                                    followups=res.get("followups", []))
         st.rerun()
+
+
+# --- data health (reconciliation invariants) ----------------------------
+@st.cache_data(ttl=60)
+def _health() -> dict:
+    import integrity
+    return integrity.summary()
+
+
+def page_health():
+    st.title("🩺 Data Health")
+    st.caption("Reconciliation invariants that keep the numbers honest — surfaces totalling "
+               "errors and data gaps instead of letting them hide inside an aggregate.")
+    if not _has_data():
+        st.info("No data yet."); return
+    summ = _health()
+    badge = {"ok": "🟢 All checks passing", "warn": "🟡 Items to review",
+             "error": "🔴 Errors found"}[summ["status"]]
+    st.subheader(badge)
+    counts = summ["counts"]
+    c = st.columns(3)
+    c[0].metric("🔴 Errors", counts["error"])
+    c[1].metric("🟡 Warnings", counts["warn"])
+    c[2].metric("ℹ️ Info", counts["info"])
+    st.caption("Invariants checked: net worth = assets − debts · total assets ≥ net worth · no "
+               "duplicate transactions · all flows classified · feeds fresh · balances reconcile to transactions.")
+    if not summ["issues"]:
+        st.success("Everything reconciles — net worth = assets − debts, no duplicates, all flows classified.")
+        return
+    for i in summ["issues"]:
+        icon = {"error": "🔴", "warn": "🟡", "info": "ℹ️"}[i["severity"]]
+        with st.expander(f"{icon} {i['message']}", expanded=(i["severity"] == "error")):
+            st.caption(f"check: `{i['code']}`")
+            if i.get("items"):
+                st.dataframe(pd.DataFrame(i["items"]), hide_index=True, use_container_width=True,
+                             column_config={"amount": st.column_config.NumberColumn(format="$%.2f")})
 
 
 # --- sidebar (global, shown on every page) ------------------------------
@@ -1298,6 +1440,7 @@ def _build_nav():
         st.Page(page_council, title="Council", icon="🏛"),
     ],
     "System": [
+        st.Page(page_health, title="Data Health", icon="🩺"),
         st.Page(page_automations, title="Automations", icon="⚙️"),
         st.Page(page_settings, title="Settings", icon="🔧"),
     ],
