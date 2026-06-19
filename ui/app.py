@@ -18,6 +18,7 @@ import streamlit as st
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "lib" / "py"))
 
+import account_classify  # noqa: E402
 import config  # noqa: E402
 import finance_rules  # noqa: E402
 import manifest as manifest_mod  # noqa: E402
@@ -58,7 +59,7 @@ CATEGORIES = sorted(set(
 @st.cache_data(ttl=30)
 def get_features() -> dict:
     import features
-    return features.build(profile=_profile(), lookback_days=90)
+    return features.build(profile=_profile())  # model default (ANALYZE_DAYS) — use all available complete months
 
 
 def _profile() -> dict:
@@ -129,13 +130,33 @@ def _refresh_all():
     st.cache_data.clear()
 
 
+@st.cache_data(ttl=30)
+def _bank_freshness() -> dict:
+    """When the bank feed was last synced, and how stale that is — so the UI
+    reports real data age, not just when the page (re)rendered."""
+    import datetime as dt
+    with store.connect() as c:
+        ts = store.data_freshness(c).get("bank")
+    if not ts:
+        return {"ts": None, "hours": None}
+    try:
+        d = dt.datetime.fromisoformat(ts)
+        hrs = (dt.datetime.now(d.tzinfo) - d).total_seconds() / 3600.0
+        return {"ts": ts, "hours": hrs}
+    except ValueError:
+        return {"ts": ts, "hours": None}
+
+
 def page_overview():
-    head, btn = st.columns([4, 1])
-    head.title("💰 My Money")
+    st.title("💰 My Money")
     if not _has_data():
         st.info("No finance data yet. Run `finance-sync` first."); return
-    if btn.button("🔄 Refresh all", help="Pull bank + Splitwise, AI-categorize, update prices/macro"):
-        _refresh_all(); st.rerun()
+
+    fr = _bank_freshness()
+    if fr["hours"] is not None and fr["hours"] > 12:
+        st.warning(f"⚠️ Bank data is **{fr['hours']:.0f}h old** "
+                   f"(last synced {fr['ts'][:16].replace('T',' ')}). "
+                   "Use **🔄 Refresh all** in the sidebar for current balances.")
 
     f = get_features()
     db = load_finance_db()
@@ -169,7 +190,7 @@ def page_overview():
 
     # ── Monthly money flow (reconciled) ──
     st.divider()
-    st.subheader("Monthly money flow")
+    st.subheader("Monthly money flow (typical month)")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Income", _money(cf["total_income_est"]),
               help=f"Salary {_money(cf['monthly_income'])} ({cf.get('pay_cadence','')}) + "
@@ -181,6 +202,26 @@ def page_overview():
                f"{cf.get('pay_cadence','')}; ~{_money(cf['est_other_income'])}/mo is non-salary income (RSU/bonus). "
                f"Emergency fund: **{res.get('emergency_fund_months','—')} months of essentials** covered.")
                + ("  ⚠️ only %d complete month(s) of history — firms up over time." % n_mo if n_mo < 2 else ""))
+    st.caption(f"ℹ︎ Typical-month figures are the median/run-rate over **{n_mo} complete calendar "
+               "month(s)**; the current month is excluded so a partial month doesn't skew them "
+               "(they update when the month closes). Live current-month activity is below 👇")
+
+    # ── This month so far (live, current incomplete month) ──
+    mtd = f.get("month_to_date") or {}
+    if mtd:
+        import datetime as _dt
+        try:
+            mlabel = _dt.datetime.strptime(mtd["month"], "%Y-%m").strftime("%B")
+        except (ValueError, KeyError):
+            mlabel = mtd.get("month", "")
+        st.markdown(f"**This month so far — {mlabel} 1–{mtd.get('day','')}**")
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Income", _money(mtd.get("income", 0)))
+        d2.metric("Spend", _money(mtd.get("spend", 0)))
+        net = mtd.get("net", 0)
+        d3.metric("Net so far", _money(net), delta=("surplus" if net >= 0 else "deficit"),
+                  delta_color=("normal" if net >= 0 else "inverse"))
+        st.caption("Live month-to-date (updates on every sync); not yet in the typical-month figures above.")
 
     # ── Net worth composition + allocation vs target ──
     left, right = st.columns(2)
@@ -232,7 +273,8 @@ def page_overview():
     s1.metric("🤝 Splitwise net", _money(swn), help="+ owed to you")
     s2.metric("⚠️ Top single-stock", f"{conc*100:.0f}% of investable",
               help="Largest single holding as % of cash + taxable investments.")
-    st.caption(f"Updated {f.get('generated_at','')[:16].replace('T',' ')}. Tabs at left break down "
+    synced = fr["ts"][:16].replace("T", " ") if fr["ts"] else "—"
+    st.caption(f"Bank data synced {synced}. Tabs at left break down "
                "Spending, Accounts, Investments, Splitwise, Market, and the AI Analysis / Council.")
 
 
@@ -376,22 +418,72 @@ def page_spending():
             st.rerun()
 
 
+TYPE_ICON = {"checking": "🏦", "savings": "💵", "credit": "💳",
+             "investment": "📊", "loan": "🏷️"}
+
+
+def _acct_kind(r: dict) -> str:
+    """Human label: the subtype if any (HYSA / brokerage / retirement / equity),
+    else the coarse type."""
+    return account_classify.label(r.get("subtype")) or (r.get("type") or "").title()
+
+
+def _acct_icon(r: dict) -> str:
+    return account_classify.icon(r.get("subtype")) or TYPE_ICON.get(r.get("type"), "•")
+
+
 def page_accounts():
     st.title("Accounts")
+    st.caption("Auto-classified from your institutions (SimpleFIN) — HYSA vs regular "
+               "savings, brokerage vs retirement vs equity awards. No manual tagging.")
     if not _has_data():
         st.info("No data yet."); return
     db = load_finance_db()
     bal = pd.DataFrame(db["balances"])
     if bal.empty:
         st.info("No accounts."); return
+    for col in ("subtype", "institution"):           # tolerate pre-migration rows
+        if col not in bal.columns:
+            bal[col] = ""
+    bal["institution"] = bal["institution"].fillna("").replace("", "Other")
+    bal["kind"] = bal.apply(lambda r: _acct_kind(r), axis=1)
+
+    aq = st.text_input("🔎 Search accounts", "",
+                       placeholder="name, institution, or kind (e.g. brokerage, HYSA)…").lower().strip()
+    if aq:
+        bal = bal[bal["name"].str.lower().str.contains(aq, na=False)
+                  | bal["institution"].str.lower().str.contains(aq, na=False)
+                  | bal["kind"].str.lower().str.contains(aq, na=False)]
+        if bal.empty:
+            st.caption("No accounts match your search."); return
 
     assets = bal[bal["balance"] > 0]["balance"].sum()
     debts = bal[bal["balance"] < 0]["balance"].sum()
-    c = st.columns(3)
+    liquid = bal[bal["type"].isin(["checking", "savings"])]["balance"].sum()
+    c = st.columns(4)
     c[0].metric("Total assets", _money(assets))
-    c[1].metric("Total debt", _money(debts))
-    c[2].metric("Net", _money(assets + debts))
+    c[1].metric("💵 Liquid cash", _money(liquid))
+    c[2].metric("Total debt", _money(debts))
+    c[3].metric("Net", _money(assets + debts))
 
+    # ── Grouped by institution (card per bank) ──
+    st.subheader("Accounts by institution")
+    order = (bal.groupby("institution")["balance"].sum()
+             .sort_values(ascending=False).index.tolist())
+    cols = st.columns(2)
+    for i, inst in enumerate(order):
+        g = bal[bal["institution"] == inst].sort_values("balance", ascending=False)
+        with cols[i % 2].container(border=True):
+            st.markdown(f"**{inst}** · net {_money(g['balance'].sum())}")
+            for _, r in g.iterrows():
+                a, b = st.columns([5, 2])
+                a.markdown(f"{_acct_icon(r)} {r['name']}  \n"
+                           f"<span style='color:#888;font-size:0.8em'>{r['kind']}</span>",
+                           unsafe_allow_html=True)
+                b.markdown(f"<div style='text-align:right'>{_money(r['balance'])}</div>",
+                           unsafe_allow_html=True)
+
+    # ── Charts ──
     left, right = st.columns([3, 2])
     with left:
         st.subheader("Balances by account")
@@ -402,12 +494,19 @@ def page_accounts():
                           xaxis_title=None, yaxis_title=None, coloraxis_showscale=False)
         st.plotly_chart(fig, use_container_width=True)
     with right:
-        st.subheader("By account type")
-        bytype = bal.groupby("type")["balance"].sum().abs()
-        st.plotly_chart(donut(list(bytype.index), list(bytype.values)), use_container_width=True)
+        st.subheader("Assets by kind")
+        pos = bal[bal["balance"] > 0]
+        bykind = pos.groupby("kind")["balance"].sum()
+        st.plotly_chart(donut(list(bykind.index), list(bykind.values)), use_container_width=True)
 
-    st.dataframe(bal[["name", "type", "balance"]].sort_values("balance", ascending=False),
-                 use_container_width=True, hide_index=True)
+    with st.expander("📋 All accounts (table)"):
+        st.dataframe(
+            bal[["name", "institution", "kind", "type", "balance"]]
+            .sort_values("balance", ascending=False)
+            .rename(columns={"name": "Account", "institution": "Institution",
+                             "kind": "Kind", "type": "Type", "balance": "Balance"}),
+            use_container_width=True, hide_index=True,
+            column_config={"Balance": st.column_config.NumberColumn(format="$%.2f")})
 
     over = [r for r in db["balances"] if r.get("overridden")]
     if over:
@@ -438,7 +537,9 @@ def page_accounts():
 
 
 def page_investments():
-    st.title("Investments")
+    st.title("📈 Investments")
+    st.caption("Is your portfolio healthy? Unrealized gains, what you can rebalance vs locked "
+               "retirement, single-stock concentration, and allocation vs target — in one view.")
     if not _has_data():
         st.info("No data yet."); return
     import features as _feat
@@ -509,8 +610,16 @@ def page_investments():
 
     # ── All holdings table ──
     st.subheader("All holdings")
+    hq = st.text_input("🔎 Search holdings", "",
+                       placeholder="symbol, holding name, or account…").lower().strip()
+    hview = hdf.sort_values("Value", ascending=False)
+    if hq:
+        mask = (hview["Symbol"].str.lower().str.contains(hq, na=False)
+                | hview["Holding"].str.lower().str.contains(hq, na=False)
+                | hview["Account"].str.lower().str.contains(hq, na=False))
+        hview = hview[mask]
     money_col = st.column_config.NumberColumn(format="$%.0f")
-    st.dataframe(hdf.sort_values("Value", ascending=False),
+    st.dataframe(hview,
                  use_container_width=True, hide_index=True,
                  column_config={"Value": money_col, "Cost": money_col, "Gain $": money_col,
                                 "Gain %": st.column_config.NumberColumn(format="%.1f%%"),
@@ -600,37 +709,209 @@ def _run_cli(args: list[str], spinner: str) -> str:
     return (res.stdout or res.stderr or "").strip()
 
 
+@st.cache_data(ttl=60)
+def _price_changes() -> dict:
+    """Latest close + change vs the prior recorded close, per symbol, from the
+    price history we already store (market-data-sync)."""
+    with store.connect() as c:
+        rows = c.execute(
+            "SELECT symbol, close, date FROM market_prices ORDER BY symbol, date").fetchall()
+    series: dict = {}
+    for r in rows:
+        series.setdefault(r["symbol"], []).append((r["date"], r["close"]))
+    out = {}
+    for sym, pts in series.items():
+        close = pts[-1][1]
+        prev = pts[-2][1] if len(pts) > 1 else None
+        pct = ((close - prev) / prev * 100) if prev else None
+        out[sym] = {"close": close, "pct": pct, "date": pts[-1][0]}
+    return out
+
+
+@st.cache_data(ttl=60)
+def _price_series() -> dict:
+    """Per-symbol close history (date-sorted) from market-data-sync, for rebased
+    performance comparison."""
+    with store.connect() as c:
+        rows = c.execute(
+            "SELECT symbol, close, date FROM market_prices ORDER BY date").fetchall()
+    series: dict = {}
+    for r in rows:
+        s = series.setdefault(r["symbol"], {"date": [], "close": []})
+        s["date"].append(r["date"]); s["close"].append(r["close"])
+    return series
+
+
+def _price_grid(symbols, prices, chg, ncol=4):
+    """Render a metric grid of symbol → price (+ % change colored)."""
+    syms = [s for s in symbols if s in prices or s in chg]
+    if not syms:
+        st.caption("No price data yet."); return
+    for i in range(0, len(syms), ncol):
+        cols = st.columns(ncol)
+        for col, sym in zip(cols, syms[i:i + ncol]):
+            price = prices.get(sym) or chg.get(sym, {}).get("close")
+            pct = chg.get(sym, {}).get("pct")
+            delta = (f"{pct:+.2f}%" if pct is not None else None)
+            col.metric(sym, f"${price:,.2f}" if isinstance(price, (int, float)) else "—", delta=delta)
+
+
 def page_market():
-    st.title("Market")
-    if st.button("🔄 Refresh news + prices"):
+    head, btn = st.columns([4, 1])
+    head.title("🌐 Market")
+    brief = _load_json("market-brief.json")
+    if btn.button("🔄 Refresh", use_container_width=True,
+                  help="Scout web for news (Claude) + pull prices/macro"):
         _run_cli(["cli/auto", "run", "market-watch"], "Scouting the web…")
         _run_cli(["cli/auto", "run", "market-data-sync"], "Fetching prices + macro…")
         st.cache_data.clear(); st.rerun()
-    brief = _load_json("market-brief.json")
     if not brief:
-        st.info("No market brief yet. Run `market-watch` / `market-data-sync`."); return
+        st.info("No market brief yet. Click **🔄 Refresh** (or run `market-watch` / "
+                "`market-data-sync`)."); return
 
-    macro = brief.get("macro", {})
-    if macro:
-        cols = st.columns(len(macro))
-        for col, (k, v) in zip(cols, macro.items()):
-            col.metric(v.get("label", k), f"{v.get('value')}")
+    # Freshness banner — the brief is only as fresh as the last market-watch run.
+    gen = brief.get("generated_at", "")
+    if gen:
+        import datetime as _dt
+        try:
+            g = _dt.datetime.fromisoformat(gen)
+            hrs = (_dt.datetime.now(g.tzinfo) - g).total_seconds() / 3600
+            msg = f"Brief from {gen[:16].replace('T', ' ')} ({hrs:.0f}h ago)"
+            (st.warning if hrs > 24 else st.caption)(
+                ("⚠️ " + msg + " — Refresh for current news.") if hrs > 24 else "🟢 " + msg)
+        except ValueError:
+            st.caption(f"Brief from {gen}")
 
+    held = list(brief.get("held_tickers") or [])
+    benchmarks = list(brief.get("benchmarks") or [])
     prices = brief.get("prices", {})
-    if prices:
-        st.subheader("Prices")
-        st.dataframe([{"symbol": k, "price": v} for k, v in sorted(prices.items())],
-                     hide_index=True, use_container_width=True)
+    chg = _price_changes()
 
-    news = brief.get("news", [])
-    st.subheader(f"Market news ({len(news)})")
-    for n in news:
-        url = n.get("url", "")
-        link = f" · [source]({url})" if url else ""
-        st.markdown(f"**{_md(n.get('headline',''))}**  \n{_md(n.get('summary',''))}  \n"
-                    f"<span style='opacity:.6'>{_md(n.get('source',''))}{link} · "
-                    f"{_md(n.get('relevance',''))}</span>", unsafe_allow_html=True)
-    st.caption(f"Brief generated {brief.get('generated_at','')}")
+    t_mkt, t_news = st.tabs(["📈 Prices & macro", f"📰 News ({len(brief.get('news', []))})"])
+
+    with t_mkt:
+        # ── Performance: your holdings vs benchmarks (the core "how am I doing vs the market") ──
+        st.subheader("Your stocks vs the market")
+        series = _price_series()
+        priced_holdings = [s for s in held if s in series]
+        default_cmp = (priced_holdings or []) + [b for b in ["SPY", "QQQ"] if b in series]
+        avail = sorted(series.keys())
+        if not avail:
+            st.caption("No price history yet — click 🔄 Refresh, then it builds daily.")
+        else:
+            pick = st.multiselect(
+                "Compare (rebased to 100 at window start)", avail,
+                default=[s for s in default_cmp if s in avail] or avail[:3],
+                help="Your held tickers with a price feed + market benchmarks. "
+                     "META = your stock; SPY/QQQ/VTI = the market.")
+            fig = go.Figure()
+            ret_rows = []
+            for sym in pick:
+                s = series[sym]
+                base = s["close"][0] if s["close"] else None
+                if not base:
+                    continue
+                reb = [c / base * 100 for c in s["close"]]
+                is_mine = sym in held
+                fig.add_trace(go.Scatter(
+                    x=s["date"], y=reb, name=("★ " + sym) if is_mine else sym,
+                    mode="lines+markers",
+                    line=dict(width=3.5 if is_mine else 1.8,
+                              dash=None if is_mine else "dot")))
+                ret_rows.append({"Symbol": sym, "Mine": "★" if is_mine else "",
+                                 "Return": (reb[-1] - 100) if reb else 0})
+            fig.update_layout(template=PLOT_TEMPLATE, height=340, yaxis_title="Rebased (100 = start)",
+                              margin=dict(t=10, b=10, l=10, r=10),
+                              legend=dict(orientation="h", y=-0.2))
+            st.plotly_chart(fig, use_container_width=True)
+            if ret_rows:
+                rdf = pd.DataFrame(ret_rows).sort_values("Return", ascending=False)
+                st.dataframe(rdf, hide_index=True, use_container_width=True,
+                             column_config={"Return": st.column_config.NumberColumn(
+                                 "Return over window", format="%.2f%%")})
+            days = max((len(series[s]["close"]) for s in series), default=0)
+            st.caption(f"★ = your holding. Window ≈ {days} trading day(s) of data so far — it "
+                       "lengthens each day market-data-sync runs. O5L9/FDRXX have no public feed, "
+                       "so they're not plotted.")
+
+        st.divider()
+        st.subheader("Your holdings")
+        db = load_finance_db()
+        hold = pd.DataFrame(db.get("holdings") or [])
+        if hold.empty:
+            st.caption("No holdings synced yet.")
+        else:
+            agg = (hold.groupby(["symbol", "name"], as_index=False)
+                   .agg(shares=("quantity", "sum"), value=("market_value", "sum")))
+            agg["price"] = agg["symbol"].map(lambda s: prices.get(s) or chg.get(s, {}).get("close"))
+            agg["chgpct"] = agg["symbol"].map(lambda s: chg.get(s, {}).get("pct"))
+            agg = agg.sort_values("value", ascending=False)
+            total = agg["value"].sum()
+            agg["weight"] = agg["value"] / total if total else 0
+            m1, m2 = st.columns(2)
+            m1.metric("Total holdings value", _money(total))
+            m2.metric("Positions", f"{len(agg)}")
+            st.dataframe(
+                agg[["symbol", "name", "shares", "price", "chgpct", "value", "weight"]],
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "symbol": "Symbol",
+                    "name": st.column_config.TextColumn("Name", width="medium"),
+                    "shares": st.column_config.NumberColumn("Shares", format="%.3f"),
+                    "price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                    "chgpct": st.column_config.NumberColumn("Chg", format="%.2f%%"),
+                    "value": st.column_config.NumberColumn("Value", format="$%.0f"),
+                    "weight": st.column_config.ProgressColumn("Weight", format="%.0f%%",
+                                                              min_value=0, max_value=1),
+                })
+            st.caption("Prices/changes from market-data-sync; '—' means no price feed for that "
+                       "symbol (e.g. money-market or plan funds).")
+        if benchmarks:
+            st.subheader("Benchmarks")
+            _price_grid(benchmarks, prices, chg)
+        macro = brief.get("macro", {})
+        if macro:
+            st.subheader("Macro indicators")
+            items = list(macro.items())
+            for i in range(0, len(items), 4):
+                cols = st.columns(4)
+                for col, (k, v) in zip(cols, items[i:i + 4]):
+                    col.metric(v.get("label", k), f"{v.get('value')}",
+                               help=f"As of {v.get('date','')}")
+
+    with t_news:
+        news = brief.get("news", [])
+        if not news:
+            st.caption("No news in the latest brief.")
+        else:
+            fcol, tcol = st.columns([3, 2])
+            q = fcol.text_input("🔎 Search news", "", placeholder="headline, summary, source, ticker…")
+            only_mine = tcol.toggle("Only my holdings", value=False)
+            heldset = {h.upper() for h in held}
+            ql = q.lower().strip()
+            shown = 0
+            for n in sorted(news, key=lambda x: str(x.get("relevance", "")), reverse=True):
+                tks = [t.upper() for t in (n.get("tickers") or [])]
+                if only_mine and not (heldset & set(tks)):
+                    continue
+                if ql:
+                    hay = " ".join([n.get("headline", ""), n.get("summary", ""),
+                                    n.get("source", ""), " ".join(tks)]).lower()
+                    if ql not in hay:
+                        continue
+                shown += 1
+                url = n.get("url", "")
+                link = f" · [source]({url})" if url else ""
+                tagline = " ".join(f"`{t}`" for t in tks) if tks else ""
+                with st.container(border=True):
+                    st.markdown(f"**{_md(n.get('headline',''))}** {tagline}")
+                    if n.get("summary"):
+                        st.markdown(_md(n.get("summary", "")))
+                    st.markdown(f"<span style='opacity:.6;font-size:0.85em'>"
+                                f"{_md(n.get('source',''))}{link} · {_md(n.get('relevance',''))}</span>",
+                                unsafe_allow_html=True)
+            if shown == 0:
+                st.caption("No news matches your filters.")
 
 
 def _stream_council():
@@ -821,11 +1102,193 @@ def page_settings():
             st.error(f"Saved but INVALID: {e}")
 
 
+# --- AI chat (answer + auto-visual) -------------------------------------
+def _chat_chart(spec: dict):
+    """Render one chart from a finance_chat spec: a catalog id (drawn from our own
+    loaded data) or a small custom {type,x,y}. Returns a Plotly fig or None."""
+    try:
+        cid = spec.get("id")
+        if cid:
+            f = get_features(); db = load_finance_db()
+            if cid == "spend_by_category":
+                d = f.get("spend_by_category_monthly", {})
+                return donut(list(d)[:8], [d[k] for k in list(d)[:8]]) if d else None
+            if cid == "monthly_income_vs_spend":
+                s = f.get("monthly_series", {})
+                if not s:
+                    return None
+                xs = sorted(s)
+                fig = go.Figure([
+                    go.Bar(name="Income", x=xs, y=[s[m]["income"] for m in xs], marker_color="#22c55e"),
+                    go.Bar(name="Spend", x=xs, y=[s[m]["spend"] for m in xs], marker_color="#ef4444")])
+                fig.update_layout(template=PLOT_TEMPLATE, barmode="group", height=320,
+                                  margin=dict(t=10, b=10, l=10, r=10))
+                return fig
+            if cid == "allocation_vs_target":
+                cur, tgt = f["allocation"]["current"], f["allocation"]["target"]
+                keys = ["equity", "bonds", "cash"]
+                fig = go.Figure([
+                    go.Bar(name="Current", x=keys, y=[cur.get(k, 0)*100 for k in keys], marker_color=ACCENT),
+                    go.Bar(name="Target", x=keys, y=[tgt.get(k, 0)*100 for k in keys], marker_color="#22c55e")])
+                fig.update_layout(template=PLOT_TEMPLATE, barmode="group", height=320,
+                                  yaxis_title="%", margin=dict(t=10, b=10, l=10, r=10))
+                return fig
+            if cid == "net_worth_composition":
+                nb = f["net_worth_breakdown"]
+                comp = [("Liquid cash", nb["liquid_cash"]), ("Taxable invest", nb["taxable_investments"]),
+                        ("Retirement", nb["retirement_locked"])]
+                comp = [(l, v) for l, v in comp if v > 0]
+                return donut([l for l, _ in comp], [v for _, v in comp]) if comp else None
+            if cid == "holdings_mix":
+                h = pd.DataFrame(db.get("holdings") or [])
+                if h.empty:
+                    return None
+                agg = h.groupby("symbol")["market_value"].sum().sort_values(ascending=False)
+                return donut(list(agg.index), list(agg.values))
+            if cid == "top_merchants":
+                df = pd.DataFrame(db.get("txns") or [])
+                if df.empty:
+                    return None
+                sp = df[(df["amount"] < 0) & (~df["category"].isin(finance_rules.NON_SPEND))].copy()
+                sp["m"] = sp["description"].apply(store.merchant_key)
+                top = sp.groupby("m")["amount"].sum().abs().sort_values(ascending=False).head(12)
+                fig = px.bar(x=top.values, y=[m.title() for m in top.index], orientation="h",
+                             template=PLOT_TEMPLATE)
+                fig.update_layout(height=340, margin=dict(t=10, b=10, l=10, r=10),
+                                  xaxis_title="$", yaxis_title=None)
+                return fig
+            if cid == "performance_vs_benchmark":
+                series = _price_series()
+                if not series:
+                    return None
+                fig = go.Figure()
+                for sym, s in series.items():
+                    base = s["close"][0] if s["close"] else None
+                    if base:
+                        fig.add_trace(go.Scatter(x=s["date"], y=[c/base*100 for c in s["close"]],
+                                                 name=sym, mode="lines+markers"))
+                fig.update_layout(template=PLOT_TEMPLATE, height=320, yaxis_title="Rebased (100=start)",
+                                  margin=dict(t=10, b=10, l=10, r=10))
+                return fig
+            if cid == "accounts_by_kind":
+                bal = pd.DataFrame(db.get("balances") or [])
+                if bal.empty:
+                    return None
+                bal["kind"] = bal.apply(lambda r: _acct_kind(r), axis=1)
+                pos = bal[bal["balance"] > 0].groupby("kind")["balance"].sum()
+                return donut(list(pos.index), list(pos.values)) if len(pos) else None
+            if cid == "splitwise_by_friend":
+                sw = pd.DataFrame(db.get("splitwise") or [])
+                if sw.empty:
+                    return None
+                sw = sw[sw["amount"].abs() > 0.5].sort_values("amount")
+                fig = px.bar(sw, x="amount", y="friend_name", orientation="h", template=PLOT_TEMPLATE,
+                             color="amount", color_continuous_scale=["#ef4444", "#22c55e"])
+                fig.update_layout(height=320, margin=dict(t=10, b=10, l=10, r=10),
+                                  xaxis_title=None, yaxis_title=None, coloraxis_showscale=False)
+                return fig
+            return None
+        # custom chart
+        typ = spec.get("type")
+        title = spec.get("title", "")
+        if typ == "pie":
+            return donut(spec.get("labels", []), spec.get("y", []), title=title)
+        if typ in ("bar", "line"):
+            x, y = spec.get("x", []), spec.get("y", [])
+            trace = (go.Bar(x=x, y=y) if typ == "bar"
+                     else go.Scatter(x=x, y=y, mode="lines+markers"))
+            fig = go.Figure([trace])
+            fig.update_layout(template=PLOT_TEMPLATE, title=title, height=320,
+                              margin=dict(t=40, b=10, l=10, r=10))
+            return fig
+    except Exception:
+        return None
+    return None
+
+
+CHAT_STARTERS = [
+    "How's my financial health overall?",
+    "Where is my money going each month?",
+    "Am I too concentrated in any one stock?",
+    "How are my accounts doing?",
+]
+
+
+def page_chat():
+    st.title("💬 Ask AI")
+    st.caption("Ask anything about your money in plain English — get a written answer **and** the "
+               "right chart, drawn from your own data. Multi-turn: follow up freely.")
+    if not _has_data():
+        st.info("No finance data yet. Run `finance-sync` first."); return
+
+    hist = st.session_state.setdefault("chat_history", [])
+    top = st.columns([4, 1])
+    top[0].caption(f"{len([m for m in hist if m['role']=='user'])} question(s) this session.")
+    if top[1].button("🗑 Clear", use_container_width=True):
+        st.session_state["chat_history"] = []; st.rerun()
+
+    if not hist:
+        st.markdown("**Try:**")
+        cols = st.columns(2)
+        for i, s in enumerate(CHAT_STARTERS):
+            if cols[i % 2].button(s, use_container_width=True, key=f"start_{i}"):
+                st.session_state["pending_prompt"] = s; st.rerun()
+
+    for m in hist:
+        with st.chat_message(m["role"]):
+            st.markdown(_md(m["content"]))      # escape $/~ so amounts don't render as LaTeX
+            for spec in m.get("charts", []):
+                fig = _chat_chart(spec)
+                if fig is not None:
+                    st.plotly_chart(fig, use_container_width=True, key=f"c_{id(spec)}")
+
+    # Follow-up chips from the latest assistant turn.
+    if hist and hist[-1]["role"] == "assistant" and hist[-1].get("followups"):
+        st.markdown("**Follow up:**")
+        fcols = st.columns(len(hist[-1]["followups"]))
+        for i, fu in enumerate(hist[-1]["followups"]):
+            if fcols[i].button(fu, key=f"fu_{len(hist)}_{i}", use_container_width=True):
+                st.session_state["pending_prompt"] = fu; st.rerun()
+
+    pending = st.session_state.pop("pending_prompt", None)
+    typed = st.chat_input("Ask about your finances… e.g. 'What did I spend on travel last month?'")
+    user_msg = pending or typed
+    if user_msg:
+        hist.append({"role": "user", "content": user_msg})
+        with st.spinner("Thinking + crunching your numbers…"):
+            import finance_chat
+            res = finance_chat.chat(hist)
+        hist.append({"role": "assistant", "content": res["answer"],
+                     "charts": res.get("charts", []), "followups": res.get("followups", [])})
+        st.rerun()
+
+
+# --- sidebar (global, shown on every page) ------------------------------
+def _sidebar():
+    """Data freshness + one-click refresh, visible on every page so the user is
+    never stuck looking at stale balances on a non-Overview tab."""
+    if not _has_data():
+        return
+    with st.sidebar:
+        st.divider()
+        fr = _bank_freshness()
+        if fr["ts"]:
+            synced = fr["ts"][:16].replace("T", " ")
+            if fr["hours"] is not None and fr["hours"] > 12:
+                st.warning(f"⚠️ Bank data {fr['hours']:.0f}h old\n\n_synced {synced}_")
+            else:
+                st.caption(f"🟢 Bank data synced {synced}")
+        if st.button("🔄 Refresh all data", use_container_width=True,
+                     help="Pull bank + Splitwise, AI-categorize, update prices/macro"):
+            _refresh_all(); st.rerun()
+
+
 # --- router -------------------------------------------------------------
 def _build_nav():
     return st.navigation({
     "Finance": [
         st.Page(page_overview, title="Overview", icon="🏠", default=True),
+        st.Page(page_chat, title="Ask AI", icon="💬"),
         st.Page(page_spending, title="Spending", icon="💳"),
         st.Page(page_accounts, title="Accounts", icon="🏦"),
         st.Page(page_investments, title="Investments", icon="📈"),
@@ -842,4 +1305,6 @@ def _build_nav():
 
 
 if __name__ == "__main__":
-    _build_nav().run()
+    nav = _build_nav()
+    _sidebar()
+    nav.run()
