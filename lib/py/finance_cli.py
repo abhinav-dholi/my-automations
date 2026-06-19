@@ -49,6 +49,53 @@ def cmd_window(args) -> int:
     return 0
 
 
+def cmd_accounts(_args) -> int:
+    """Per-account snapshot: balance, type/subtype, institution, holdings. No
+    full account numbers (names carry only the bank's masked last-4)."""
+    with store.connect() as conn:
+        bals = [dict(r) for r in store.latest_balances(conn)]
+        holds = [dict(r) for r in store.latest_holdings(conn)]
+    by_acct: dict = {}
+    for h in holds:
+        by_acct.setdefault(h["account_id"], []).append(
+            {"symbol": h["symbol"], "name": h["name"],
+             "value": round(h.get("market_value") or 0, 2)})
+    out = [{
+        "name": b["name"], "type": b["type"], "subtype": b.get("subtype") or "",
+        "institution": b.get("institution") or "", "balance": round(b["balance"], 2),
+        "holdings": sorted(by_acct.get(b["id"], []), key=lambda x: -x["value"])[:25],
+    } for b in bals]
+    print(json.dumps(out, indent=2))
+    return 0
+
+
+def cmd_transactions(args) -> int:
+    """Raw transactions (date, amount, DESCRIPTION, category) over a window, with
+    optional category/text filters. Exposes merchant descriptions to the caller
+    by design (chat-agent scope) — never account numbers."""
+    since = int(time.time()) - args.days * 86400
+    with store.connect() as conn:
+        rows = [dict(r) for r in store.transactions_since(conn, since)]
+    s = (args.search or "").lower().strip()
+    cat = (args.category or "").lower().strip()
+    out = []
+    for r in rows:
+        if cat and (r.get("category") or "").lower() != cat:
+            continue
+        if s and s not in (r.get("description") or "").lower():
+            continue
+        out.append({
+            "date": time.strftime("%Y-%m-%d", time.localtime(r["posted"])),
+            "amount": round(r["amount"], 2),
+            "description": r.get("description") or "",
+            "category": r.get("category") or "",
+        })
+        if len(out) >= args.limit:
+            break
+    print(json.dumps({"count": len(out), "days": args.days, "transactions": out}, indent=2))
+    return 0
+
+
 def cmd_store_insight(args) -> int:
     # Prefer --json (single-line, permission-friendly); fall back to stdin.
     payload = args.json if args.json is not None else sys.stdin.read()
@@ -113,6 +160,15 @@ def main() -> int:
     pw = sub.add_parser("window")
     pw.add_argument("--days", type=int, default=30)
     pw.set_defaults(func=cmd_window)
+
+    sub.add_parser("accounts").set_defaults(func=cmd_accounts)
+
+    pt = sub.add_parser("transactions")
+    pt.add_argument("--days", type=int, default=90)
+    pt.add_argument("--category", default=None)
+    pt.add_argument("--search", default=None)
+    pt.add_argument("--limit", type=int, default=200)
+    pt.set_defaults(func=cmd_transactions)
 
     ps = sub.add_parser("store-insight")
     ps.add_argument("--agent", default="finance-analyze")
