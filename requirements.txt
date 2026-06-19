@@ -1,6 +1,7 @@
 # Core runner + finance automation deps
 requests==2.32.3
 PyYAML==6.0.2
+matplotlib==3.9.2        # Telegram chart images (UI uses Plotly; bot can't render it)
 
 # UI dashboard (auto ui)
 streamlit==1.40.0

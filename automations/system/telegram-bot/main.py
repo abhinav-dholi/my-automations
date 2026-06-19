@@ -61,9 +61,13 @@ ACTION_NEEDS = {                     # finance action -> data sources it reads
 
 HELP = (
     "🤖 my-automations — your personal automation platform.\n"
-    "Everything runs locally on your Mac. Your financial data never leaves the "
-    "machine except anonymized aggregates (and public market data) sent to Claude "
-    "for analysis. Today it covers the Finance domain; more domains can be added.\n"
+    "Everything runs locally on your Mac. Today it covers the Finance domain; "
+    "more domains can be added.\n"
+    "\n"
+    "💬 TIP: just type a question — no command needed — e.g. \"how much did I "
+    "spend on dining last month?\" You'll get an answer plus a chart, and the "
+    "answer is remembered (shared with the dashboard).\n"
+    "Or tap a button below.\n"
     "\n"
     "━━ GLOBAL ━━\n"
     "/help — this overview\n"
@@ -129,11 +133,73 @@ def _api(token: str, method: str, **params):
     ).json()
 
 
-def _send(token: str, chat_id: str, text: str) -> None:
+def _send(token: str, chat_id: str, text: str, *, markdown: bool = False,
+          reply_markup: dict | None = None) -> None:
+    """Send a message. With markdown=True, try Telegram Markdown and fall back to
+    plain text if it fails to parse (agent output can contain stray * _ ` )."""
+    payload: dict = {"chat_id": chat_id, "text": text[:4096],
+                     "disable_web_page_preview": True}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    if markdown:
+        payload["parse_mode"] = "Markdown"
+    r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                      json=payload, timeout=25)
+    if markdown:
+        try:
+            ok = r.json().get("ok", False)
+        except ValueError:
+            ok = False
+        if not ok:                       # Markdown parse failed → resend as plain
+            payload.pop("parse_mode", None)
+            requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                          json=payload, timeout=25)
+
+
+def _send_photo(token: str, chat_id: str, png: bytes, caption: str = "") -> None:
     requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": text}, timeout=20,
+        f"https://api.telegram.org/bot{token}/sendPhoto",
+        data={"chat_id": chat_id, "caption": caption[:1024]},
+        files={"photo": ("chart.png", png, "image/png")}, timeout=30,
     )
+
+
+# --- inline keyboards ---------------------------------------------------
+def _main_menu() -> dict:
+    """Tappable action menu (callback_data are short commands)."""
+    return {"inline_keyboard": [
+        [{"text": "📊 Summary", "callback_data": "/finance summary"},
+         {"text": "🔄 Sync", "callback_data": "/finance sync"}],
+        [{"text": "🧠 Analyze", "callback_data": "/finance analyze"},
+         {"text": "🏛 Council", "callback_data": "/finance council"}],
+        [{"text": "🌐 Market brief", "callback_data": "/finance brief"},
+         {"text": "📅 Weekly", "callback_data": "/finance weekly"}],
+        [{"text": "📋 Status", "callback_data": "/status"},
+         {"text": "❓ Help", "callback_data": "/help"}],
+    ]}
+
+
+# Follow-up questions can exceed Telegram's 64-byte callback_data limit, so we
+# stash them in memory and reference by short token (resets on restart — fine).
+_FOLLOWUPS: dict[str, str] = {}
+
+
+def _followup_keyboard(followups: list[str]) -> dict | None:
+    if not followups:
+        return None
+    rows = []
+    for i, fu in enumerate(followups[:3]):
+        tok = f"f{len(_FOLLOWUPS)}_{i}"
+        _FOLLOWUPS[tok] = fu
+        rows.append([{"text": f"💬 {fu[:50]}", "callback_data": f"fu:{tok}"}])
+    return {"inline_keyboard": rows}
+
+
+def _resolve_callback(data: str) -> str:
+    """Map a callback payload back to the command/question text to handle."""
+    if data.startswith("fu:"):
+        return "/finance " + _FOLLOWUPS.get(data[3:], "")
+    return data
 
 
 def _status_text() -> str:
@@ -228,7 +294,7 @@ def _known_ids() -> set[str]:
 
 def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
     if cmd in ("/help", "/start"):
-        _send(token, chat_id, HELP)
+        _send(token, chat_id, HELP, reply_markup=_main_menu())
         return
     if cmd == "/status":
         _send(token, chat_id, _status_text())
@@ -288,13 +354,36 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
             extra = ("\n" + "\n".join(tails)) if tails else ""
             if self_notified and not tails:
                 extra = " — full result sent above 👆"
-            _send(token, chat_id, f"{head}{extra}")
-        else:                              # treat the whole thing as a question
+            _send(token, chat_id, f"{head}{extra}", reply_markup=_main_menu())
+        else:                              # NL question → smart chat agent (UI parity)
             _send(token, chat_id, "💭 thinking…")
             ensure_fresh(token, chat_id, ACTION_NEEDS["question"])
             sys.path.insert(0, str(config.LIB_PY))
-            import finance_ask
-            _send(token, chat_id, finance_ask.answer(rest))
+            import finance_chat
+            import store
+            conv_id = f"tg-{chat_id}"       # shared history: shows up in the UI too
+            store.init_db()
+            with store.connect() as conn:
+                history = store.load_chat(conn, conv_id)
+            history.append({"role": "user", "content": rest})
+            res = finance_chat.chat(history)
+            with store.connect() as conn:
+                store.save_chat_message(conn, conv_id=conv_id, role="user", content=rest)
+                store.save_chat_message(conn, conv_id=conv_id, role="assistant",
+                                        content=res["answer"], charts=res.get("charts", []),
+                                        followups=res.get("followups", []))
+            _send(token, chat_id, res["answer"], markdown=True)
+            for spec in (res.get("charts") or [])[:1]:   # one chart keeps it snappy
+                try:
+                    import finance_viz
+                    png = finance_viz.render(spec)
+                    if png:
+                        _send_photo(token, chat_id, png, caption=spec.get("title", ""))
+                except Exception as e:
+                    print(f"[telegram-bot] chart render failed: {e}", flush=True)
+            kb = _followup_keyboard(res.get("followups") or [])
+            if kb:
+                _send(token, chat_id, "Follow up, or ask anything else 👇", reply_markup=kb)
         return
 
 
@@ -330,7 +419,13 @@ def main() -> None:
             offset = init["result"][-1]["update_id"] + 1
             _save_offset(offset)
 
-    _send(token, chat_id, "🤖 my-automations bot online. /help for commands.")
+    sys.path.insert(0, str(config.LIB_PY))
+    import store
+    store.init_db()                         # ensure chat history table exists
+    _send(token, chat_id,
+          "🤖 *my-automations* online. Tap an action, or just type a question "
+          "like _\"how much did I spend on dining last month?\"_",
+          markdown=True, reply_markup=_main_menu())
     print("[telegram-bot] online, polling…")
 
     while True:
@@ -344,6 +439,29 @@ def main() -> None:
         for upd in resp.get("result", []):
             offset = upd["update_id"] + 1
             _save_offset(offset)
+
+            # Tapped inline button → resolve to a command/question and dispatch.
+            cb = upd.get("callback_query")
+            if cb:
+                cb_chat = str(((cb.get("message") or {}).get("chat") or {}).get("id", ""))
+                data = cb.get("data", "")
+                try:
+                    _api(token, "answerCallbackQuery", callback_query_id=cb["id"])
+                except requests.RequestException:
+                    pass
+                if cb_chat != chat_id:
+                    continue
+                resolved = _resolve_callback(data)
+                cmd = root_command(resolved)
+                print(f"[telegram-bot] callback {data!r} -> {resolved!r}", flush=True)
+                if cmd:
+                    try:
+                        handle(token, chat_id, cmd, resolved)
+                    except Exception as e:
+                        print(f"[telegram-bot] callback error: {e}", flush=True)
+                        _send(token, chat_id, f"⚠️ error: {e}")
+                continue
+
             msg = upd.get("message") or upd.get("edited_message") or {}
             from_chat = str((msg.get("chat") or {}).get("id", ""))
             text = msg.get("text", "")
@@ -352,15 +470,18 @@ def main() -> None:
                 print(f"[telegram-bot] ignored (chat {from_chat} != {chat_id})", flush=True)
                 continue
             cmd = root_command(text)
-            if cmd:
-                print(f"[telegram-bot] handling {cmd}", flush=True)
-                try:
+            try:
+                if cmd:
+                    print(f"[telegram-bot] handling {cmd}", flush=True)
                     handle(token, chat_id, cmd, text)
-                except Exception as e:
-                    print(f"[telegram-bot] handler error: {e}", flush=True)
-                    _send(token, chat_id, f"⚠️ error handling {cmd}: {e}")
-            else:
-                _send(token, chat_id, "Unknown command. /help")
+                elif text and not text.startswith("/"):
+                    # Free text → treat as a finance question (no command needed).
+                    handle(token, chat_id, "/finance", "/finance " + text)
+                else:
+                    _send(token, chat_id, "Unknown command.", reply_markup=_main_menu())
+            except Exception as e:
+                print(f"[telegram-bot] handler error: {e}", flush=True)
+                _send(token, chat_id, f"⚠️ error: {e}")
 
 
 if __name__ == "__main__":
