@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1712" height="960" viewBox="0 0 1712 960" font-family="Helvetica,Arial,sans-serif">
+<defs><marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 z" fill="#5c5f66"/></marker></defs>
+<rect width="1712" height="960" fill="#ffffff"/>
+<text x="40" y="42" font-size="28" fill="#1971c2" text-anchor="start" font-weight="600">Personal Financial Intelligence System</text>
+<text x="40" y="70" font-size="14" fill="#868e96" text-anchor="start">Local-first  ·  cash-honest  ·  self-reconciling  ·  deterministic core (the LLM never decides a number)</text>
+<rect x="40" y="88" width="15" height="15" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<text x="61" y="98" font-size="12" fill="#495057" text-anchor="start">Source</text>
+<rect x="190" y="88" width="15" height="15" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<text x="211" y="98" font-size="12" fill="#495057" text-anchor="start">Ingest</text>
+<rect x="340" y="88" width="15" height="15" rx="8" fill="#ced4da" stroke="#495057" stroke-width="2"/>
+<text x="361" y="98" font-size="12" fill="#495057" text-anchor="start">Store</text>
+<rect x="490" y="88" width="15" height="15" rx="8" fill="#ffec99" stroke="#f08c00" stroke-width="2"/>
+<text x="511" y="98" font-size="12" fill="#495057" text-anchor="start">Deterministic</text>
+<rect x="640" y="88" width="15" height="15" rx="8" fill="#d0bfff" stroke="#7048e8" stroke-width="2"/>
+<text x="661" y="98" font-size="12" fill="#495057" text-anchor="start">AI / Claude</text>
+<rect x="790" y="88" width="15" height="15" rx="8" fill="#fcc2d7" stroke="#e64980" stroke-width="2"/>
+<text x="811" y="98" font-size="12" fill="#495057" text-anchor="start">Surface</text>
+<text x="40" y="140" font-size="16" fill="#2f9e44" text-anchor="start" font-weight="600">①  SOURCES</text>
+<rect x="40" y="148" width="312" height="60" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<text x="196" y="174" font-size="14" fill="#1e1e1e" text-anchor="middle">SimpleFIN</text>
+<text x="196" y="192" font-size="14" fill="#1e1e1e" text-anchor="middle">banks · cards · investments</text>
+<rect x="370" y="148" width="312" height="60" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<text x="526" y="174" font-size="14" fill="#1e1e1e" text-anchor="middle">Splitwise</text>
+<text x="526" y="192" font-size="14" fill="#1e1e1e" text-anchor="middle">balances · shares</text>
+<rect x="700" y="148" width="312" height="60" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<text x="856" y="174" font-size="14" fill="#1e1e1e" text-anchor="middle">Finnhub</text>
+<text x="856" y="192" font-size="14" fill="#1e1e1e" text-anchor="middle">daily prices</text>
+<rect x="1030" y="148" width="312" height="60" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<text x="1186" y="174" font-size="14" fill="#1e1e1e" text-anchor="middle">FRED</text>
+<text x="1186" y="192" font-size="14" fill="#1e1e1e" text-anchor="middle">macro</text>
+<rect x="1360" y="148" width="312" height="60" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<text x="1516" y="174" font-size="14" fill="#1e1e1e" text-anchor="middle">Web</text>
+<text x="1516" y="192" font-size="14" fill="#1e1e1e" text-anchor="middle">news (via Claude)</text>
+<text x="40" y="256" font-size="16" fill="#1971c2" text-anchor="start" font-weight="600">②  INGEST</text>
+<rect x="40" y="264" width="312" height="100" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<text x="54" y="289" font-size="14" fill="#1e1e1e" text-anchor="start">finance-sync · 06:00</text>
+<text x="54" y="312" font-size="10" fill="#1971c2" text-anchor="start">fetch → upsert → match transfers →</text>
+<text x="54" y="325" font-size="10" fill="#1971c2" text-anchor="start">reimbursements → subtypes → rule labels</text>
+<rect x="370" y="264" width="312" height="100" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<text x="526" y="310" font-size="14" fill="#1e1e1e" text-anchor="middle">splitwise-sync</text>
+<text x="526" y="328" font-size="14" fill="#1e1e1e" text-anchor="middle">06:30</text>
+<rect x="700" y="264" width="312" height="100" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<text x="856" y="310" font-size="14" fill="#1e1e1e" text-anchor="middle">market-data-sync</text>
+<text x="856" y="328" font-size="14" fill="#1e1e1e" text-anchor="middle">weekdays 17:00</text>
+<rect x="1030" y="264" width="312" height="100" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<text x="1186" y="310" font-size="14" fill="#1e1e1e" text-anchor="middle">market-watch</text>
+<text x="1186" y="328" font-size="14" fill="#1e1e1e" text-anchor="middle">weekdays 08/16 · Claude</text>
+<rect x="1360" y="264" width="312" height="100" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<text x="1516" y="310" font-size="14" fill="#1e1e1e" text-anchor="middle">finance-categorize</text>
+<text x="1516" y="328" font-size="14" fill="#1e1e1e" text-anchor="middle">06:45 · Claude</text>
+<text x="40" y="412" font-size="16" fill="#495057" text-anchor="start" font-weight="600">③  DATA STORE</text>
+<rect x="40" y="420" width="1632" height="86" rx="8" fill="#ced4da" stroke="#495057" stroke-width="2"/>
+<text x="54" y="446" font-size="15" fill="#1e1e1e" text-anchor="start">SQLite  ·  data/finance.db   (gitignored · FileVault)</text>
+<text x="54" y="472" font-size="12" fill="#343a40" text-anchor="start">core: accounts · transactions · balances · holdings        labels: transaction_labels (manual&gt;ai&gt;rule) · learned_categories · txn_flags</text>
+<text x="54" y="486" font-size="12" fill="#343a40" text-anchor="start">market: prices · macro · news        splitwise: balances · expenses        outputs: snapshots · insights · chat_messages · balance_overrides</text>
+<text x="40" y="554" font-size="16" fill="#f08c00" text-anchor="start" font-weight="600">④  DETERMINISTIC ANALYTICS</text>
+<text x="1040" y="554" font-size="16" fill="#7048e8" text-anchor="start" font-weight="600">⑤  AI · Claude</text>
+<rect x="40" y="564" width="472" height="212" rx="8" fill="#ffec99" stroke="#f08c00" stroke-width="2"/>
+<text x="54" y="590" font-size="15" fill="#1e1e1e" text-anchor="start">features.build()</text>
+<text x="54" y="616" font-size="12" fill="#5c3c00" text-anchor="start">CASH WATERFALL (typical month):</text>
+<text x="54" y="630" font-size="12" fill="#5c3c00" text-anchor="start">  take-home − spend + net reimbursements</text>
+<text x="54" y="646" font-size="12" fill="#5c3c00" text-anchor="start">  = OPERATING CASH SURPLUS</text>
+<text x="54" y="660" font-size="12" fill="#5c3c00" text-anchor="start">  (401k · one-time · savings-transfers: separate)</text>
+<text x="54" y="676" font-size="12" fill="#5c3c00" text-anchor="start"></text>
+<text x="54" y="690" font-size="12" fill="#5c3c00" text-anchor="start">NET WORTH = Σ effective acct value</text>
+<text x="54" y="706" font-size="12" fill="#5c3c00" text-anchor="start">  − debts + Splitwise receivable</text>
+<text x="54" y="720" font-size="12" fill="#5c3c00" text-anchor="start">allocation · concentration · emergency fund</text>
+<rect x="532" y="564" width="480" height="212" rx="8" fill="#ffec99" stroke="#f08c00" stroke-width="2"/>
+<text x="546" y="590" font-size="15" fill="#1e1e1e" text-anchor="start">integrity → Data Health</text>
+<text x="546" y="616" font-size="12" fill="#5c3c00" text-anchor="start">Reconciling invariants (every load):</text>
+<text x="546" y="630" font-size="12" fill="#5c3c00" text-anchor="start">  • net worth == assets − debts (+ receivable)</text>
+<text x="546" y="646" font-size="12" fill="#5c3c00" text-anchor="start">  • total assets ≥ net worth</text>
+<text x="546" y="660" font-size="12" fill="#5c3c00" text-anchor="start">  • duplicate-detect: acct+merchant+amt ≤2d</text>
+<text x="546" y="676" font-size="12" fill="#5c3c00" text-anchor="start">  • stale / phantom holdings · stale feeds</text>
+<text x="546" y="690" font-size="12" fill="#5c3c00" text-anchor="start">  • balance ↔ transactions reconcile</text>
+<text x="546" y="706" font-size="12" fill="#5c3c00" text-anchor="start"></text>
+<text x="546" y="720" font-size="12" fill="#5c3c00" text-anchor="start">classification (transfers · finance_rules ·</text>
+<text x="546" y="736" font-size="12" fill="#5c3c00" text-anchor="start">account_classify) feeds features.</text>
+<rect x="1040" y="564" width="632" height="212" rx="8" fill="#f3f0ff" stroke="#7048e8" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="1054" y="583" font-size="11" fill="#7048e8" text-anchor="start">🔒 privacy boundary — only aggregates (analyze/council) or</text>
+<text x="1054" y="597" font-size="11" fill="#7048e8" text-anchor="start">txn descriptions (chat/categorize) cross; never account numbers.</text>
+<rect x="1054" y="624" width="296" height="66" rx="8" fill="#d0bfff" stroke="#7048e8" stroke-width="2"/>
+<text x="1202" y="654" font-size="12" fill="#1e1e1e" text-anchor="middle">finance-analyze</text>
+<text x="1202" y="669" font-size="12" fill="#1e1e1e" text-anchor="middle">aggregates · report</text>
+<rect x="1366" y="624" width="296" height="66" rx="8" fill="#d0bfff" stroke="#7048e8" stroke-width="2"/>
+<text x="1514" y="654" font-size="12" fill="#1e1e1e" text-anchor="middle">finance-council</text>
+<text x="1514" y="669" font-size="12" fill="#1e1e1e" text-anchor="middle">8 investors + mediator</text>
+<rect x="1054" y="700" width="296" height="66" rx="8" fill="#d0bfff" stroke="#7048e8" stroke-width="2"/>
+<text x="1202" y="730" font-size="12" fill="#1e1e1e" text-anchor="middle">Ask AI · finance_chat</text>
+<text x="1202" y="745" font-size="12" fill="#1e1e1e" text-anchor="middle">answer + auto-charts</text>
+<rect x="1366" y="700" width="296" height="66" rx="8" fill="#d0bfff" stroke="#7048e8" stroke-width="2"/>
+<text x="1514" y="730" font-size="12" fill="#1e1e1e" text-anchor="middle">categorize · market-watch</text>
+<text x="1514" y="745" font-size="12" fill="#1e1e1e" text-anchor="middle">label Other · news</text>
+<text x="40" y="816" font-size="16" fill="#e64980" text-anchor="start" font-weight="600">⑥  SURFACES</text>
+<rect x="40" y="826" width="640" height="104" rx="8" fill="#fcc2d7" stroke="#e64980" stroke-width="2"/>
+<text x="54" y="852" font-size="15" fill="#1e1e1e" text-anchor="start">Streamlit dashboard  (127.0.0.1)</text>
+<text x="54" y="878" font-size="12" fill="#7a1f47" text-anchor="start">Overview (cash waterfall · net worth) · Spending (categories + tags)</text>
+<text x="54" y="892" font-size="12" fill="#7a1f47" text-anchor="start">Accounts · Investments · Market · Ask AI · Data Health · Council</text>
+<rect x="700" y="826" width="446" height="104" rx="8" fill="#fcc2d7" stroke="#e64980" stroke-width="2"/>
+<text x="714" y="852" font-size="15" fill="#1e1e1e" text-anchor="start">Telegram bot  (always-on)</text>
+<text x="714" y="878" font-size="12" fill="#7a1f47" text-anchor="start">question → answer + chart image + buttons</text>
+<text x="714" y="892" font-size="12" fill="#7a1f47" text-anchor="start">inline menu · history shared with dashboard</text>
+<rect x="1166" y="826" width="506" height="104" rx="8" fill="#fcc2d7" stroke="#e64980" stroke-width="2"/>
+<text x="1180" y="852" font-size="15" fill="#1e1e1e" text-anchor="start">CLI  ·  auto</text>
+<text x="1180" y="878" font-size="12" fill="#7a1f47" text-anchor="start">run · status · ui · logs</text>
+<text x="1180" y="892" font-size="12" fill="#7a1f47" text-anchor="start">start · stop · skills · deploy</text>
+<line x1="196" y1="208" x2="196" y2="264" stroke="#2f9e44" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="526" y1="208" x2="526" y2="264" stroke="#2f9e44" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="856" y1="208" x2="856" y2="264" stroke="#2f9e44" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="1186" y1="208" x2="1186" y2="264" stroke="#2f9e44" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="1516" y1="208" x2="1516" y2="264" stroke="#2f9e44" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="196" y1="364" x2="196" y2="420" stroke="#1971c2" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="526" y1="364" x2="526" y2="420" stroke="#1971c2" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="856" y1="364" x2="856" y2="420" stroke="#1971c2" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="1186" y1="364" x2="1186" y2="420" stroke="#1971c2" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="1516" y1="364" x2="1516" y2="420" stroke="#1971c2" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="276" y1="506" x2="276" y2="564" stroke="#495057" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="772" y1="506" x2="772" y2="564" stroke="#495057" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="1356" y1="506" x2="1356" y2="564" stroke="#7048e8" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arr)"/>
+<line x1="276" y1="776" x2="360" y2="826" stroke="#f08c00" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="772" y1="776" x2="360" y2="826" stroke="#f08c00" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="1356" y1="776" x2="923" y2="826" stroke="#7048e8" stroke-width="2" marker-end="url(#arr)"/>
+<line x1="1356" y1="776" x2="1419" y2="826" stroke="#7048e8" stroke-width="2" marker-end="url(#arr)"/>
+</svg>

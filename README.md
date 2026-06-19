@@ -29,48 +29,96 @@ a deterministic analytics core and a Claude layer for analysis and Q&A.
 
 ### Architecture
 
-> Editable diagram: [`docs/financial-intelligence-system.excalidraw`](docs/financial-intelligence-system.excalidraw)
-> (open at [excalidraw.com](https://excalidraw.com) → *Open*).
+📐 **[Full module reference → `docs/MODULES.md`](docs/MODULES.md)**  ·  editable diagram:
+[`docs/financial-intelligence-system.excalidraw`](docs/financial-intelligence-system.excalidraw)
+([open at excalidraw.com](https://excalidraw.com)) · [SVG render](docs/financial-intelligence-system.svg)
 
 ```mermaid
 flowchart TB
-    subgraph S["① Sources (external)"]
+    subgraph SRC["① Sources (external)"]
         SF[SimpleFIN<br/>banks · cards · investments]
-        SW[Splitwise<br/>shared expenses]
+        SW[Splitwise<br/>balances · shares]
         FH[Finnhub<br/>prices]
         FR[FRED<br/>macro]
-        WEB[Web<br/>market news]
+        WEB[Web · Claude<br/>news]
     end
-    subgraph I["② Ingest automations (Python · launchd)"]
-        FSY[finance-sync<br/>ETL · transfer-match · rule labels]
+
+    subgraph ING["② Ingest · Python · launchd · idempotent"]
+        FSY["finance-sync<br/>fetch → upsert → match transfers →<br/>reimbursements → subtypes → rule labels"]
         SWS[splitwise-sync]
         MDS[market-data-sync]
-        MW[market-watch<br/>Claude news brief]
-        CAT[finance-categorize<br/>AI labels 'Other']
+        MW[market-watch · Claude]
+        CAT[finance-categorize · Claude]
     end
-    DB[("③ SQLite  data/finance.db<br/>gitignored · FileVault<br/>accounts · transactions · balances · holdings · labels ·<br/>txn_flags · splitwise · prices · macro · news · insights · chat")]
-    subgraph DET["④ Deterministic analytics (single source of truth)"]
-        FEAT[features<br/>cash-honest cashflow · net-worth reconciliation · allocation]
-        RULES[transfers · finance_rules · account_classify]
-        INT[integrity<br/>Data-Health invariants]
+
+    DB[("③ SQLite · data/finance.db · local, FileVault<br/>accounts · transactions · balances · holdings<br/>labels (manual&gt;ai&gt;rule) · txn_flags · learned_categories<br/>market · splitwise · snapshots · insights · chat")]
+
+    subgraph DET["④ Deterministic analytics · single source of truth"]
+        FEAT["features<br/>cash waterfall · net worth<br/>allocation · concentration · emergency fund"]
+        CLS["transfers · finance_rules<br/>account_classify"]
+        INT["integrity → Data Health<br/>reconciling invariants"]
     end
-    subgraph AI["⑤ AI layer (Claude, headless)"]
-        ANA[finance-analyze · finance-council]
-        ASK[Ask-AI · finance_chat<br/>answer + auto-charts]
+
+    subgraph AIL["⑤ AI · Claude · privacy boundary"]
+        ANA[finance-analyze]
+        COU[finance-council]
+        ASK[Ask AI · finance_chat]
     end
-    subgraph U["⑥ Surfaces"]
+
+    subgraph SURF["⑥ Surfaces · same lib, identical numbers"]
         UI[Streamlit dashboard]
         TG[Telegram bot]
         CLI[CLI · auto]
     end
 
-    SF & SW & FH & FR & WEB --> I
-    FSY & SWS & MDS & MW & CAT --> DB
-    DB --> DET
-    DB -. aggregates / descriptions only .-> AI
-    DET --> U
-    AI --> U
+    SF --> FSY
+    SW --> SWS
+    FH --> MDS
+    FR --> MDS
+    WEB --> MW
+    FSY --> DB
+    SWS --> DB
+    MDS --> DB
+    MW --> DB
+    CAT --> DB
+    DB --> CLS
+    CLS --> FEAT
+    DB --> FEAT
+    DB --> INT
+    FEAT --> ANA
+    FEAT --> COU
+    FEAT -. "aggregates + descriptions only" .-> ASK
+    FEAT --> UI
+    INT --> UI
+    ANA --> UI
+    COU --> UI
+    ASK --> UI
+    ASK --> TG
 ```
+
+### End-to-end data flow
+
+1. **Ingest** — `finance-sync` pulls SimpleFIN in 45-day chunks (banks cap history
+   ~90 days), upserts accounts/transactions/balances/holdings idempotently, then in
+   one pass: **matches internal transfers** (debit↔credit by amount/date — card-bill
+   payments become `Payment`), **detects P2P reimbursements** (inbound Zelle/Venmo
+   "from a person", excluded from transfer-matching), **classifies subtypes**
+   (HYSA via behavioural APY + product list; brokerage/retirement/equity), and
+   **applies rule labels**. `splitwise-sync`, `market-data-sync`, and `market-watch`
+   load their domains; `finance-categorize` asks Claude to label only what's left
+   as `Other`.
+2. **Store** — everything lands in one local SQLite DB. Category precedence is
+   **manual > ai > rule**; manual edits learn a merchant→category rule and persist.
+3. **Deterministic analytics** — `features.build()` reads the DB and computes every
+   metric in plain Python (the LLM never produces a number): the cash-flow waterfall,
+   net worth, allocation, concentration, emergency fund. `integrity` runs the
+   reconciling invariants for the **Data Health** page.
+4. **AI layer** — `finance-analyze`/`finance-council` get *only anonymized
+   aggregates*; `Ask AI` (and the categorizer) additionally see transaction
+   *descriptions*. Account numbers never cross this boundary. The chat agent returns
+   a JSON contract (`answer` + chart specs the UI renders deterministically).
+5. **Surfaces** — the dashboard, Telegram bot, and CLI all read the same lib, so the
+   numbers are identical everywhere; chat history is shared between phone and dashboard.
 
 ### The accuracy / cash model (don't regress)
 
