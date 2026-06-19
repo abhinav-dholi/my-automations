@@ -27,6 +27,7 @@ def build() -> dict:
         "net_worth": f["net_worth"],
         "investable_surplus": f.get("investable_surplus", 0),
         "cashflow": f["cashflow"],
+        "month_to_date": f.get("month_to_date"),
         "resilience": f["resilience"],
         "portfolio": f["portfolio"],
         "splitwise_net": f["splitwise"]["net_balance_by_currency"],
@@ -79,11 +80,16 @@ def format_text(s: dict) -> str:
     sr = cf.get("savings_rate", 0) * 100
     lines += [
         "",
-        f"📅 Monthly ({cf.get('pay_cadence','')}): income ~${cf.get('total_income_est',0):,.0f} "
+        f"📅 Typical month ({cf.get('pay_cadence','')}): income ~${cf.get('total_income_est',0):,.0f} "
         f"(salary ${cf['monthly_income']:,.0f} + RSU/other ${cf.get('est_other_income',0):,.0f}), "
         f"spend ~${cf['monthly_spend']:,.0f}",
         f"💰 Saving ~${cf.get('monthly_to_savings',0):,.0f}/mo to savings = {sr:.0f}% rate",
     ]
+    mtd = s.get("month_to_date") or {}
+    if mtd:
+        lines.append(f"🗓 This month so far (to day {mtd.get('day','')}): "
+                     f"income ${mtd.get('income',0):,.0f}, spend ${mtd.get('spend',0):,.0f}, "
+                     f"net {'+' if mtd.get('net',0)>=0 else '−'}${abs(mtd.get('net',0)):,.0f}")
     if em is not None:
         ess = s["resilience"].get("essential_monthly", 0)
         surplus = s.get("investable_surplus", 0)

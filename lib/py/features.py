@@ -317,6 +317,13 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
                      f"~${monthly_income:,.0f}; the rest (~${est_other_income:,.0f}/mo) is non-salary "
                      "income (RSU/bonus). 401(k) is pre-tax/locked and not modeled here."),
         },
+        "month_to_date": {                             # current (incomplete) month, live
+            "month": cur_month,
+            "day": int(time.strftime("%d")),
+            "income": round(m_income.get(cur_month, 0.0), 2),
+            "spend": round(m_spend.get(cur_month, 0.0), 2),
+            "net": round(m_income.get(cur_month, 0.0) - m_spend.get(cur_month, 0.0), 2),
+        },
         "monthly_series": monthly_series,              # {YYYY-MM: {income, spend}}
         "spend_by_category_monthly": {
             k: round(v, 2)

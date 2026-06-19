@@ -39,6 +39,26 @@ ACTION_LABELS = {
 }
 SELF_NOTIFY = {"finance-summary", "finance-weekly", "finance-analyze", "finance-council"}
 
+# Freshness guard — on-demand reads sync ONLY when their data is older than this
+# (hours), so the DB (synced on a daily/twice-daily cron) is never silently stale
+# for a /finance read. Avoids re-syncing on every command. Bank is cheap HTTP;
+# the market brief (news) is a Claude run, so its threshold is wider and it's
+# only refreshed for the deep market reports.
+FRESH_MAX_H = {"bank": 2.0, "prices": 12.0, "news": 8.0}
+SOURCE_SYNC = {                      # source -> automation(s) that refresh it
+    "bank": ["finance-sync", "splitwise-sync"],
+    "prices": ["market-data-sync"],
+    "news": ["market-watch"],
+}
+ACTION_NEEDS = {                     # finance action -> data sources it reads
+    "summary": ["bank"],
+    "weekly": ["bank"],
+    "question": ["bank"],
+    "expert": ["bank", "prices"],
+    "analyze": ["bank", "prices", "news"],
+    "council": ["bank", "prices", "news"],
+}
+
 HELP = (
     "🤖 my-automations — your personal automation platform.\n"
     "Everything runs locally on your Mac. Your financial data never leaves the "
@@ -156,6 +176,44 @@ def _run(automation_id: str) -> tuple[bool, str]:
     return ok, (tail[-1] if tail else f"exit {res.returncode}")
 
 
+def _age_hours(ts: str | None) -> float:
+    """Hours since an ISO8601 timestamp (or date-only string). Huge if missing
+    or unparseable, so an absent source always counts as stale."""
+    if not ts:
+        return 1e9
+    import datetime as dt
+    try:
+        if len(ts) == 10:                       # date-only, e.g. market_prices.date
+            d = dt.datetime.strptime(ts, "%Y-%m-%d").date()
+            return (dt.date.today() - d).days * 24.0
+        d = dt.datetime.fromisoformat(ts)
+        return (dt.datetime.now(d.tzinfo) - d).total_seconds() / 3600.0
+    except ValueError:
+        return 1e9
+
+
+def ensure_fresh(token: str, chat_id: str, sources: list[str]) -> None:
+    """Refresh any of `sources` whose data is older than its threshold, before a
+    read. Syncs run silently except for one heads-up so the user knows why a
+    read paused. Failures are non-fatal — the read proceeds on existing data."""
+    sys.path.insert(0, str(config.LIB_PY))
+    import store
+    with store.connect() as conn:
+        fresh = store.data_freshness(conn)
+    to_run, stale = [], []
+    for s in sources:
+        if _age_hours(fresh.get(s)) > FRESH_MAX_H[s]:
+            stale.append(s)
+            for aid in SOURCE_SYNC[s]:
+                if aid not in to_run:
+                    to_run.append(aid)
+    if not to_run:
+        return
+    _send(token, chat_id, f"🔄 {', '.join(stale)} data was stale — refreshing first…")
+    for aid in to_run:
+        _run(aid)
+
+
 def _run_and_report(token: str, chat_id: str, aid: str) -> None:
     _send(token, chat_id, f"▶ running {aid}…")
     ok, msg = _run(aid)
@@ -205,6 +263,7 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
             key = parts[1].lower()
             q = parts[2] if len(parts) > 2 else None
             _send(token, chat_id, f"🧠 consulting {key}…")
+            ensure_fresh(token, chat_id, ACTION_NEEDS["expert"])
             cmd_list = [sys.executable, "lib/py/council_cli.py", "expert", key]
             if q:
                 cmd_list += ["--q", q]
@@ -216,6 +275,7 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
             ids = FINANCE_ACTIONS[first]
             label = ACTION_LABELS.get(first, first)
             _send(token, chat_id, f"{label}…")
+            ensure_fresh(token, chat_id, ACTION_NEEDS.get(first, []))
             all_ok, tails, self_notified = True, [], False
             for aid in ids:
                 ok, msg = _run(aid)
@@ -231,6 +291,7 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
             _send(token, chat_id, f"{head}{extra}")
         else:                              # treat the whole thing as a question
             _send(token, chat_id, "💭 thinking…")
+            ensure_fresh(token, chat_id, ACTION_NEEDS["question"])
             sys.path.insert(0, str(config.LIB_PY))
             import finance_ask
             _send(token, chat_id, finance_ask.answer(rest))
