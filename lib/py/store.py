@@ -148,8 +148,25 @@ CREATE TABLE IF NOT EXISTS splitwise_expenses (
     group_id INTEGER,
     ingested_at TEXT
 );
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conv_id TEXT,               -- groups messages into a conversation
+    role TEXT,                  -- 'user' | 'assistant'
+    content TEXT,
+    charts_json TEXT,           -- assistant chart specs (catalog ids / custom)
+    followups_json TEXT,
+    created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS txn_flags (
+    txn_id TEXT PRIMARY KEY,
+    one_time INTEGER DEFAULT 0,   -- real but non-recurring: kept in actuals, out of run-rate
+    excluded INTEGER DEFAULT 0,   -- not real (duplicate/error): dropped from all analytics
+    note TEXT,
+    updated_at TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_txn_posted ON transactions (posted);
 CREATE INDEX IF NOT EXISTS idx_txn_account ON transactions (account_id);
+CREATE INDEX IF NOT EXISTS idx_chat_conv ON chat_messages (conv_id, id);
 """
 
 
@@ -182,6 +199,15 @@ def _migrate(conn) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(accounts)")}
     if "subtype" not in cols:
         conn.execute("ALTER TABLE accounts ADD COLUMN subtype TEXT")
+    # Re-key learned merchant rules to the current merchant_key (drops leaked
+    # processor-noise prefixes like 'aplpay '). Idempotent.
+    for pat, cat in list(conn.execute("SELECT pattern, category FROM learned_categories")):
+        toks = [t for t in pat.split() if t not in _PROC_NOISE]
+        newpat = " ".join(toks[:2])
+        if newpat and newpat != pat:
+            conn.execute("INSERT OR REPLACE INTO learned_categories (pattern,category,created_at) "
+                         "VALUES (?,?,?)", (newpat, cat, _now()))
+            conn.execute("DELETE FROM learned_categories WHERE pattern=?", (pat,))
 
 
 # --- writes -------------------------------------------------------------
@@ -195,6 +221,62 @@ def upsert_account(conn, *, id, name, type, institution, currency, source) -> No
              currency=excluded.currency, last_synced=excluded.last_synced""",
         (id, name, type, institution, currency, source, _now(), _now()),
     )
+
+
+def set_txn_flags(conn, txn_id: str, *, one_time=None, excluded=None, note="") -> None:
+    """Persist manual transaction tags. 'one_time' keeps the txn in actuals/net
+    worth but removes it from typical-month run-rate; 'excluded' drops it from all
+    analytics (a duplicate/error). Survives re-syncs."""
+    cur = conn.execute("SELECT one_time, excluded, note FROM txn_flags WHERE txn_id=?",
+                       (txn_id,)).fetchone()
+    ot = int(one_time) if one_time is not None else (cur["one_time"] if cur else 0)
+    ex = int(excluded) if excluded is not None else (cur["excluded"] if cur else 0)
+    conn.execute(
+        "INSERT OR REPLACE INTO txn_flags (txn_id,one_time,excluded,note,updated_at) "
+        "VALUES (?,?,?,?,?)", (txn_id, ot, ex, note or (cur["note"] if cur else ""), _now()))
+
+
+def txn_flags(conn) -> dict:
+    """Map txn_id -> {'one_time': bool, 'excluded': bool} for all flagged txns."""
+    return {r["txn_id"]: {"one_time": bool(r["one_time"]), "excluded": bool(r["excluded"])}
+            for r in conn.execute("SELECT txn_id, one_time, excluded FROM txn_flags")}
+
+
+def save_chat_message(conn, *, conv_id, role, content, charts=None, followups=None) -> None:
+    """Persist one chat turn so the Ask-AI history survives reloads/restarts."""
+    conn.execute(
+        """INSERT INTO chat_messages (conv_id,role,content,charts_json,followups_json,created_at)
+           VALUES (?,?,?,?,?,?)""",
+        (conv_id, role, content, json.dumps(charts or []),
+         json.dumps(followups or []), _now()),
+    )
+
+
+def load_chat(conn, conv_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT role,content,charts_json,followups_json FROM chat_messages "
+        "WHERE conv_id=? ORDER BY id", (conv_id,)).fetchall()
+    return [{"role": r["role"], "content": r["content"],
+             "charts": json.loads(r["charts_json"] or "[]"),
+             "followups": json.loads(r["followups_json"] or "[]")} for r in rows]
+
+
+def list_chats(conn, limit: int = 30) -> list[dict]:
+    """Recent conversations, newest first: id, title (first user message), count,
+    and start time."""
+    rows = conn.execute(
+        """SELECT conv_id,
+                  MIN(created_at) AS started,
+                  SUM(role='user') AS questions,
+                  (SELECT content FROM chat_messages c2
+                   WHERE c2.conv_id=c.conv_id AND role='user' ORDER BY id LIMIT 1) AS title
+           FROM chat_messages c
+           GROUP BY conv_id ORDER BY MAX(id) DESC LIMIT ?""", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_chat(conn, conv_id: str) -> None:
+    conn.execute("DELETE FROM chat_messages WHERE conv_id=?", (conv_id,))
 
 
 def set_account_subtype(conn, account_id: str, subtype: str) -> None:
@@ -421,9 +503,19 @@ def set_manual_category(conn, txn_id: str, category: str) -> None:
               label_source="manual", confidence=1.0)
 
 
+_PROC_NOISE = {"aplpay", "applepay", "apple", "gpay", "googlepay", "bt", "tst", "sq",
+               "sp", "py", "pp", "paypal", "pos", "purchase", "debit", "ach", "dd",
+               "sumup", "toast", "clover", "stripe", "checkcard"}
+
+
 def merchant_key(description: str) -> str:
-    """Normalized merchant signature: lowercase, letters only, first 2 tokens."""
-    toks = re.sub(r"[^a-z ]", " ", (description or "").lower()).split()
+    """Normalized merchant signature for matching/dedup. Drops payment-processor
+    prefixes (Apple Pay, TST*, SQ*, BT*…) so the REAL merchant survives:
+    'AplPay BT*WAYMO MOUNTAIN VIEW' -> 'waymo mountain' (not 'aplpay bt')."""
+    d = (description or "").lower()
+    if "*" in d:
+        d = d.rsplit("*", 1)[-1]            # text after the last * is usually the merchant
+    toks = [t for t in re.sub(r"[^a-z ]", " ", d).split() if t not in _PROC_NOISE]
     return " ".join(toks[:2])
 
 
@@ -519,9 +611,17 @@ def data_freshness(conn) -> dict:
 
 
 def latest_holdings(conn) -> list[sqlite3.Row]:
+    """Current positions only. A holding is dropped if (a) the feed stopped
+    reporting it — its newest snapshot predates the account's last sync by >1 day,
+    so the position was closed/vested-out — or (b) it has no shares. Without this,
+    vanished positions linger forever and inflate net worth (e.g. an emptied
+    equity-award account still showing stale RSU value)."""
     return conn.execute(
-        """SELECT * FROM holdings h
+        """SELECT h.* FROM holdings h
+           JOIN accounts a ON a.id = h.account_id
            WHERE h.as_of = (SELECT MAX(as_of) FROM holdings
                             WHERE account_id=h.account_id AND symbol=h.symbol)
-           ORDER BY market_value DESC""",
+             AND substr(h.as_of,1,10) >= date(substr(a.last_synced,1,10), '-1 day')
+             AND COALESCE(h.quantity,0) > 0
+           ORDER BY h.market_value DESC""",
     ).fetchall()

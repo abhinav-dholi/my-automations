@@ -127,19 +127,29 @@ def main() -> None:
 
         # Detect internal transfers across accounts and relabel both legs as
         # Transfer (excluded from income/spend). Don't override manual labels.
+        # Inbound p2p reimbursements are excluded so a friend's repayment isn't
+        # mis-paired with a same-amount internal debit (it's real cash to you).
         all_txns = conn.execute(
-            "SELECT id, account_id, amount, posted FROM transactions"
+            "SELECT id, account_id, amount, posted, description FROM transactions"
         ).fetchall()
+        reimb_ids = {r["id"] for r in all_txns
+                     if finance_rules.is_reimbursement(r["description"], r["amount"])}
         manual = {r["txn_id"] for r in conn.execute(
             "SELECT txn_id FROM transaction_labels WHERE label_source='manual'")}
-        transfer_ids = transfers.detect_internal_transfers(all_txns)
+        acct_type = {r["id"]: r["type"] for r in conn.execute("SELECT id, type FROM accounts")}
+        pairs = transfers.detect_internal_transfers(all_txns, exclude_ids=reimb_ids, return_pairs=True)
         n_transfers = 0
-        for tid in transfer_ids:
-            if tid in manual:
-                continue
-            store.set_label(conn, txn_id=tid, category="Transfer",
-                            label_source="rule", confidence=1.0, model="transfer-match")
-            n_transfers += 1
+        for debit, credit in pairs:
+            # A transfer that lands on a credit card is a bill PAYMENT (clearer than
+            # the generic Transfer); both are excluded from spend identically.
+            cat = "Payment" if (acct_type.get(debit["account_id"]) == "credit"
+                                or acct_type.get(credit["account_id"]) == "credit") else "Transfer"
+            for leg in (debit, credit):
+                if leg["id"] in manual:
+                    continue
+                store.set_label(conn, txn_id=leg["id"], category=cat,
+                                label_source="rule", confidence=1.0, model="transfer-match")
+                n_transfers += 1
 
         # Classify subtypes (brokerage/retirement/equity / HYSA-vs-regular) from
         # name + institution + measured interest yield, so accounts self-label.

@@ -106,25 +106,63 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
         holdings = store.latest_holdings(conn)
         sw_net = store.splitwise_net(conn)
         sw_share = store.splitwise_share_since(conn, since_iso)
+        flags = store.txn_flags(conn)        # manual one-time / excluded tags
 
-    # Aggregate per calendar month so we can average robustly.
+    # Aggregate per calendar month. Two parallel sets: actuals (for the per-month
+    # series / month-to-date) and one-time portions (subtracted out for the
+    # typical-month run-rate). 'excluded' txns are ignored entirely.
     cur_month = _ym(int(time.time()))
     m_income: dict[str, float] = {}
     m_spend: dict[str, float] = {}
     m_spend_cat: dict[str, dict[str, float]] = {}
+    m_reimb: dict[str, float] = {}        # inbound p2p reimbursements (cash back for fronted spend)
+    m_p2p_out: dict[str, float] = {}      # outbound p2p to people (netted against reimbursements)
+    ot_income: dict[str, float] = {}
+    ot_spend: dict[str, float] = {}
+    ot_spend_cat: dict[str, dict[str, float]] = {}
+    ot_reimb: dict[str, float] = {}
+    ot_p2p_out: dict[str, float] = {}
     income_dates: list[int] = []
     excluded_movement = 0.0
     for t in txns:
+        fl = flags.get(t["id"], {})
+        if fl.get("excluded"):            # duplicate/error → not real, drop everywhere
+            continue
+        ot = fl.get("one_time", False)    # real but non-recurring → keep in actuals only
         cat, amt, ym = t["category"], t["amount"], _ym(t["posted"])
+        if amt < 0 and finance_rules.is_p2p_outflow(t["description"], amt):
+            m_p2p_out[ym] = m_p2p_out.get(ym, 0.0) + abs(amt)
+            if ot:
+                ot_p2p_out[ym] = ot_p2p_out.get(ym, 0.0) + abs(amt)
         if cat == "Income":
             if amt > 0:
                 m_income[ym] = m_income.get(ym, 0.0) + amt
                 income_dates.append(t["posted"])
+                if ot:
+                    ot_income[ym] = ot_income.get(ym, 0.0) + amt
+        elif cat == "Reimbursement":
+            if amt > 0:
+                m_reimb[ym] = m_reimb.get(ym, 0.0) + amt
+                if ot:
+                    ot_reimb[ym] = ot_reimb.get(ym, 0.0) + amt
         elif cat in finance_rules.NON_SPEND:
             excluded_movement += abs(amt)
         elif amt < 0:
             m_spend[ym] = m_spend.get(ym, 0.0) + abs(amt)
             m_spend_cat.setdefault(ym, {})[cat] = m_spend_cat.setdefault(ym, {}).get(cat, 0.0) + abs(amt)
+            if ot:
+                ot_spend[ym] = ot_spend.get(ym, 0.0) + abs(amt)
+                ot_spend_cat.setdefault(ym, {})[cat] = ot_spend_cat.setdefault(ym, {}).get(cat, 0.0) + abs(amt)
+
+    # Recurring (run-rate) views = actuals minus one-time portions.
+    def _rec(actual: dict, onetime: dict) -> dict:
+        return {m: actual.get(m, 0.0) - onetime.get(m, 0.0) for m in actual}
+    r_income = _rec(m_income, ot_income)
+    r_spend = _rec(m_spend, ot_spend)
+    r_reimb = _rec(m_reimb, ot_reimb)
+    r_p2p_out = _rec(m_p2p_out, ot_p2p_out)
+    r_spend_cat = {m: {c: v - ot_spend_cat.get(m, {}).get(c, 0.0) for c, v in cats.items()}
+                   for m, cats in m_spend_cat.items()}
 
     # Complete months only: drop the current partial month, and drop the
     # earliest month if the data starts mid-month (also partial). Use MEDIAN so
@@ -161,56 +199,77 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
     else:
         pay_cadence = "monthly"
 
-    # Savings rate is computed TIMING-NEUTRAL: total income vs total spend over
-    # the complete window (calendar boundaries / paycheck timing don't matter).
-    # Run-rate monthly figures = window totals / #complete months; median spend
-    # kept as the robust "typical month". NOTE: this rate excludes pre-tax 401(k)
-    # and money moved to savings/brokerage (transfers) — true saving is higher.
+    # CASH-HONEST cashflow. Run-rate monthly figures = complete-window totals /
+    # #complete months. Median spend kept as the robust "typical month".
     n = max(1, len(complete))
-    tot_income = sum(m_income.get(m, 0.0) for m in complete)
-    tot_spend = sum(m_spend.get(m, 0.0) for m in complete)
-    monthly_income = round(tot_income / n, 2)
-    monthly_spend = round(tot_spend / n, 2)
-    typical_month_spend = _median(m_spend)
-    avg_monthly_spend = _mean(m_spend)
-    take_home_surplus_rate = round((tot_income - tot_spend) / tot_income, 3) if tot_income else 0.0
+    tot_income = sum(r_income.get(m, 0.0) for m in complete)   # recurring (excl. one-time)
+    tot_spend = sum(r_spend.get(m, 0.0) for m in complete)
+    monthly_income = round(tot_income / n, 2)        # recurring take-home (payroll)
+    monthly_spend = round(tot_spend / n, 2)          # recurring consumption (excl. one-time)
+    typical_month_spend = _median(r_spend)
+    avg_monthly_spend = _mean(r_spend)
 
-    # After-tax model: money hitting the account is already post-tax. The 401(k)
-    # is pre-tax (never deposited) — invisible here and NOT modeled. Saving = cash
-    # you actually moved into savings/brokerage (accounts you control).
     acct_type = {b["id"]: b["type"] for b in balances}
     acct_name = {b["id"]: (b["name"] or "").lower() for b in balances}
 
     def _is_retirement(aid: str) -> bool:
-        n = acct_name.get(aid, "")
-        return any(k in n for k in ["401", "ira", "roth", "retirement", "403b", "hsa", "health savings"])
+        n2 = acct_name.get(aid, "")
+        return any(k in n2 for k in ["401", "ira", "roth", "retirement", "403b", "hsa", "health savings"])
 
     def _is_savings_dest(aid: str) -> bool:
         t = acct_type.get(aid)
         if t == "savings":
             return True
-        # taxable brokerage / equity-award — investment but NOT locked retirement
-        if t == "investment" and not _is_retirement(aid):
+        if t == "investment" and not _is_retirement(aid):   # taxable brokerage / equity
             return True
         return False
 
-    net_to_savings = sum(
+    # NET reimbursements = cash people paid you back (inbound p2p) MINUS money you
+    # sent to people (outbound p2p). Netting makes a pass-through (got $X from A,
+    # sent $X to B) a wash, and counts a genuine repayment for spend you fronted.
+    gross_reimb = sum(r_reimb.get(m, 0.0) for m in complete) / n
+    p2p_sent = sum(r_p2p_out.get(m, 0.0) for m in complete) / n
+    monthly_reimbursements = round(gross_reimb, 2)
+    monthly_p2p_sent = round(p2p_sent, 2)
+    net_reimbursements = round(gross_reimb - p2p_sent, 2)
+
+    # THE headline number: operating cash surplus = recurring take-home MINUS
+    # consumption, plus NET reimbursements. The real monthly cash you keep from
+    # salary. We do NOT infer phantom "other income"; lumpy RSU/bonus/refund
+    # inflows are reported separately and never folded into recurring income.
+    operating_cash_surplus = round(monthly_income - monthly_spend + net_reimbursements, 2)
+    operating_surplus_rate = round(operating_cash_surplus / monthly_income, 3) if monthly_income else 0.0
+
+    # Pre-tax 401(k)/HSA contributions (Investment moves in retirement accounts):
+    # wealth-building but NOT spendable cash and NOT in take-home above.
+    monthly_pretax_retirement = round(-sum(
+        t["amount"] for t in txns
+        if _ym(t["posted"]) in complete and t["category"] == "Investment"
+        and t["amount"] < 0 and _is_retirement(t["account_id"])
+        and not flags.get(t["id"], {}).get("excluded")
+    ) / n, 2)
+
+    # Cash MOVED into savings/taxable accounts (transfers + deposits). This is
+    # relocation of money — it can be funded by one-time inflows or existing cash,
+    # so it is NOT recurring saving and must never be read as income.
+    monthly_moved_to_savings = round(sum(
         t["amount"] for t in txns
         if _ym(t["posted"]) in complete and t["category"] in finance_rules.NON_SPEND
-        and t["category"] != "Income" and _is_savings_dest(t["account_id"])
-    )
-    monthly_to_savings = round(net_to_savings / n, 2)
+        and t["category"] != "Income" and t["amount"] > 0 and _is_savings_dest(t["account_id"])
+        and not flags.get(t["id"], {}).get("excluded")
+    ) / n, 2)
 
-    # Reconcilable savings rate: of every dollar you DEPLOYED (consumed or saved),
-    # what share did you save? Avoids guessing total income with big RSU/bonus
-    # inflows; always reconciles (deployed = consume + save). No 401(k) modeling.
-    total_saved = max(monthly_to_savings, 0.0)
-    deployed = monthly_spend + total_saved
-    savings_rate = round(total_saved / deployed, 3) if deployed else 0.0
-    # Salary covers take-home; the rest you deploy is non-salary after-tax income
-    # (RSU vesting / bonus). Inferred from flows, not classified.
-    est_other_income = round(max(0.0, deployed - monthly_income), 2)
-    total_income_est = round(monthly_income + est_other_income, 2)
+    # One-time / lumpy cash inflows (tax refunds, bonuses) — non-payroll credits to
+    # liquid accounts. Reported as a window TOTAL (not a monthly average) so a
+    # one-off refund never looks like recurring monthly money.
+    one_time_inflows_window = round(sum(
+        t["amount"] for t in txns
+        if _ym(t["posted"]) in complete and t["category"] == "Credit"
+        and t["amount"] > 0 and acct_type.get(t["account_id"]) in LIQUID_TYPES
+    ), 2)
+
+    # Back-compat alias: savings_rate now means the honest operating rate.
+    savings_rate = operating_surplus_rate
 
     # Per-month series (for the dashboard trend) + category monthly average.
     monthly_series = {m: {"income": round(m_income.get(m, 0.0), 2),
@@ -218,7 +277,7 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
     spend_by_cat: dict[str, float] = {}
     n = max(1, len(complete))
     for m in complete:
-        for c, v in m_spend_cat.get(m, {}).items():
+        for c, v in r_spend_cat.get(m, {}).items():     # recurring (one-time excluded)
             spend_by_cat[c] = spend_by_cat.get(c, 0.0) + v / n  # mean per month
 
     # Emergency fund covers ESSENTIAL monthly expenses only (rent/utilities/
@@ -254,7 +313,11 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
     credit_debt = round(sum(b["balance"] for b in balances if b["type"] == "credit"), 2)
     other_bal = round(sum(b["balance"] for b in balances
                           if b["type"] not in ("checking", "savings", "investment", "credit")), 2)
-    net_worth = round(liquid + taxable_inv + retirement_locked + credit_debt + other_bal, 2)
+    # Splitwise net is a real receivable (+ owed to you) / liability (− you owe):
+    # money you fronted for others returns to you, so it belongs in net worth.
+    splitwise_receivable = round(sum(sw_net.values()), 2) if sw_net else 0.0
+    net_worth = round(liquid + taxable_inv + retirement_locked + credit_debt
+                      + other_bal + splitwise_receivable, 2)
     controllable = round(liquid + taxable_inv, 2)  # cash + taxable holdings you can rebalance
 
     # Concentration is over what you CONTROL (cash + taxable holdings), excluding
@@ -299,23 +362,30 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
         "lookback_days": lookback_days,
         "months_analyzed": len(complete),
         "cashflow": {
-            "monthly_income": monthly_income,          # take-home salary, after-tax, run-rate
-            "est_other_income": est_other_income,      # non-salary after-tax (RSU/bonus), inferred
-            "total_income_est": total_income_est,      # salary + other
-            "monthly_spend": monthly_spend,            # consumption (excl. transfers/savings)
+            "monthly_income": monthly_income,          # recurring take-home (payroll only)
+            "monthly_spend": monthly_spend,            # gross consumption (excl. transfers/savings/investing)
+            "monthly_reimbursements": monthly_reimbursements,   # cash people paid you back (inbound p2p)
+            "monthly_p2p_sent": monthly_p2p_sent,      # money you sent to people (outbound p2p)
+            "net_reimbursements": net_reimbursements,  # inbound - outbound (folded into surplus)
+            "operating_cash_surplus": operating_cash_surplus,   # income - spend + net reimbursements = real cash kept/mo
+            "operating_surplus_rate": operating_surplus_rate,   # surplus / take-home
+            "savings_rate": savings_rate,              # == operating_surplus_rate (honest, cash-based)
+            "monthly_pretax_retirement": monthly_pretax_retirement,  # 401k/HSA pre-tax (wealth, not cash)
+            "monthly_moved_to_savings": monthly_moved_to_savings,    # gross transfers INTO savings — relocation, NOT income
+            "one_time_inflows_window": one_time_inflows_window,      # refunds/bonuses TOTAL over the window (lumpy)
             "typical_month_spend": typical_month_spend,
             "avg_monthly_spend": avg_monthly_spend,
-            "monthly_to_savings": monthly_to_savings,  # net cash moved into savings/brokerage
-            "monthly_investable_estimate": monthly_to_savings,
-            "savings_rate": savings_rate,              # saved / (saved + consumed) — reconciles
-            "take_home_surplus_rate": take_home_surplus_rate,  # (salary - consumption)/salary, narrow
+            "complete_months": len(complete),
             "pay_cadence": pay_cadence,
             "excluded_movement_total": round(excluded_movement, 2),
-            "note": (f"After-tax. Savings rate = saved ÷ (saved + consumed): you saved "
-                     f"~${monthly_to_savings:,.0f}/mo and consumed ~${monthly_spend:,.0f}/mo over "
-                     f"{len(complete)} complete months ({pay_cadence} pay). Salary covers "
-                     f"~${monthly_income:,.0f}; the rest (~${est_other_income:,.0f}/mo) is non-salary "
-                     "income (RSU/bonus). 401(k) is pre-tax/locked and not modeled here."),
+            "note": (f"Cash-based, after-tax, over {len(complete)} complete month(s) ({pay_cadence} pay). "
+                     f"Take-home ~${monthly_income:,.0f}/mo − spend ~${monthly_spend:,.0f}/mo + net "
+                     f"reimbursements ~${net_reimbursements:,.0f}/mo (people paid you back "
+                     f"${monthly_reimbursements:,.0f}, you sent ${monthly_p2p_sent:,.0f}) = OPERATING CASH "
+                     f"SURPLUS ~${operating_cash_surplus:,.0f}/mo ({operating_surplus_rate*100:.0f}% of take-home). "
+                     f"Separately (NOT recurring cash): ~${monthly_pretax_retirement:,.0f}/mo pre-tax 401(k); "
+                     f"${one_time_inflows_window:,.0f} one-time inflows (refunds/bonuses) over the window. Money "
+                     f"moved into savings (~${monthly_moved_to_savings:,.0f}/mo) is relocation, NOT income."),
         },
         "month_to_date": {                             # current (incomplete) month, live
             "month": cur_month,
@@ -344,6 +414,7 @@ def build(profile: dict | None = None, lookback_days: int = ANALYZE_DAYS) -> dic
             "taxable_investments": taxable_inv,
             "retirement_locked": retirement_locked,   # 401k/HSA — not investable now
             "credit_debt": credit_debt,
+            "splitwise_receivable": splitwise_receivable,   # + owed to you / − you owe
         },
         "investable_surplus": investable_surplus,      # liquid cash BEYOND the emergency reserve (deployable)
         "investable_cash": investable_surplus,         # alias; NOT the savings flow

@@ -11,7 +11,38 @@ from __future__ import annotations
 
 # Money-movement / inflows that are NOT consumption and NOT recurring income.
 # Excluded from spend; only the "Income" category counts toward income.
+# NOTE: "Reimbursement" is deliberately NOT here — it's real cash back for spend
+# you fronted, so the cashflow model nets it against spending (raises surplus).
 NON_SPEND = {"Income", "Transfer", "Payment", "Investment", "Credit"}
+
+# Peer-to-peer apps. An INBOUND p2p payment "from <a person>" is a reimbursement
+# (someone paying you back), NOT an internal transfer between your own accounts
+# (those read "Online Transfer from CHK/SAV …"). We must split the two so a
+# friend repaying you isn't silently dropped as money-movement.
+P2P_APPS = ("zelle", "venmo", "cash app", "cashapp", "apple cash", "paypal")
+_OWN_ACCOUNT_HINTS = ("from chk", "from sav", "to chk", "to sav", "online transfer",
+                      "checking", "savings", "internal transfer")
+
+
+def is_reimbursement(description: str, amount: float) -> bool:
+    """Inbound p2p payment from a person → a reimbursement (cash back to you)."""
+    desc = (description or "").lower()
+    if amount <= 0 or not any(a in desc for a in P2P_APPS):
+        return False
+    if any(h in desc for h in _OWN_ACCOUNT_HINTS):   # your own-account transfer
+        return False
+    return "from" in desc
+
+
+def is_p2p_outflow(description: str, amount: float) -> bool:
+    """Outbound p2p payment to a person (you sending money). Netted against
+    reimbursements so a pass-through (got $X from A, sent $X to B) is a wash."""
+    desc = (description or "").lower()
+    if amount >= 0 or not any(a in desc for a in P2P_APPS):
+        return False
+    if any(h in desc for h in _OWN_ACCOUNT_HINTS):
+        return False
+    return "to " in desc or "payment to" in desc
 
 CATEGORY_RULES = [
     # Recurring income (payroll / stipend) — must be matched explicitly; a
@@ -52,6 +83,10 @@ CATEGORY_RULES = [
 
 def categorize(description: str, amount: float) -> str:
     desc = (description or "").lower()
+    if is_reimbursement(description, amount):     # inbound p2p from a person
+        return "Reimbursement"
+    if "uber one" in desc or "uber pass" in desc:  # membership, not a ride
+        return "Subscriptions"
     for category, keywords in CATEGORY_RULES:
         if any(kw in desc for kw in keywords):
             return category

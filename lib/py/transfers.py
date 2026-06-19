@@ -12,23 +12,33 @@ from collections import defaultdict
 DAYS_TOLERANCE = 4
 
 
-def detect_internal_transfers(txns, days_tol: int = DAYS_TOLERANCE) -> set[str]:
-    """Return ids of transactions that are one leg of an internal transfer.
+def detect_internal_transfers(txns, days_tol: int = DAYS_TOLERANCE,
+                              exclude_ids: set | None = None, return_pairs: bool = False):
+    """Identify the two legs of each internal transfer.
 
     txns: rows/dicts with id, account_id, amount (signed), posted (unix sec).
     Matches each debit to an unused equal-magnitude credit in a *different*
-    account within the date tolerance.
+    account within the date tolerance. `exclude_ids` are never matched on either
+    side (e.g. inbound p2p reimbursements, which look like a stray credit and
+    would otherwise be mis-paired with a same-amount internal debit).
+
+    Returns a set of leg ids, or — with return_pairs=True — a list of
+    (debit_txn, credit_txn) pairs so callers can inspect the accounts (e.g. to
+    label a payment landing on a credit card differently).
     """
     tol = days_tol * 86400
+    exclude_ids = exclude_ids or set()
     credits = defaultdict(list)  # rounded magnitude -> [credit txns]
     for t in txns:
-        if t["amount"] > 0:
+        if t["amount"] > 0 and t["id"] not in exclude_ids:
             credits[round(t["amount"], 2)].append(t)
 
     used: set[str] = set()
     transfer_ids: set[str] = set()
+    pairs: list = []
     # Process debits oldest→newest for stable pairing.
-    debits = sorted((t for t in txns if t["amount"] < 0), key=lambda t: t["posted"])
+    debits = sorted((t for t in txns if t["amount"] < 0 and t["id"] not in exclude_ids),
+                    key=lambda t: t["posted"])
     for d in debits:
         mag = round(-d["amount"], 2)
         best = None
@@ -42,4 +52,5 @@ def detect_internal_transfers(txns, days_tol: int = DAYS_TOLERANCE) -> set[str]:
             used.add(best["id"])
             transfer_ids.add(best["id"])
             transfer_ids.add(d["id"])
-    return transfer_ids
+            pairs.append((d, best))
+    return pairs if return_pairs else transfer_ids

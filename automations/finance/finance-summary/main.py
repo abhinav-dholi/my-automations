@@ -77,13 +77,15 @@ def format_text(s: dict) -> str:
             lines.append(f"   {sign}${abs(b['amount']):,.0f}  {b['friend_name'][:24]} ({who})")
 
     em = s["resilience"].get("emergency_fund_months")
-    sr = cf.get("savings_rate", 0) * 100
+    surplus_mo = cf.get("operating_cash_surplus", 0)
+    rate = cf.get("operating_surplus_rate", 0) * 100
     lines += [
         "",
-        f"📅 Typical month ({cf.get('pay_cadence','')}): income ~${cf.get('total_income_est',0):,.0f} "
-        f"(salary ${cf['monthly_income']:,.0f} + RSU/other ${cf.get('est_other_income',0):,.0f}), "
-        f"spend ~${cf['monthly_spend']:,.0f}",
-        f"💰 Saving ~${cf.get('monthly_to_savings',0):,.0f}/mo to savings = {sr:.0f}% rate",
+        f"📅 Typical month ({cf.get('pay_cadence','')}): take-home ${cf['monthly_income']:,.0f}, "
+        f"spend ${cf['monthly_spend']:,.0f}",
+        f"💵 Operating cash surplus: ${surplus_mo:,.0f}/mo ({rate:.0f}% of take-home) — real recurring cash kept",
+        f"🏦 Pre-tax 401(k): ${cf.get('monthly_pretax_retirement',0):,.0f}/mo (wealth, not cash). "
+        f"One-time inflows ${cf.get('one_time_inflows_window',0):,.0f} over {cf.get('complete_months',0)} mo (lumpy)",
     ]
     mtd = s.get("month_to_date") or {}
     if mtd:
