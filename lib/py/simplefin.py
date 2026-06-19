@@ -68,6 +68,8 @@ class Account:
     balance: float
     transactions: list[Transaction]
     holdings: list[Holding]
+    institution: str = ""    # org.name from SimpleFIN (e.g. "E*Trade")
+    org_domain: str = ""     # org.domain (e.g. "us.etrade.com") — used for HYSA heuristics
 
 
 def get_accounts(access_url: str, start: int, end: int,
@@ -131,6 +133,7 @@ def get_accounts(access_url: str, start: int, end: int,
             )
             for h in a.get("holdings", [])  # present on investment accounts
         ]
+        org = a.get("org") or {}
         accounts.append(
             Account(
                 id=a.get("id", ""),
@@ -139,6 +142,8 @@ def get_accounts(access_url: str, start: int, end: int,
                 balance=float(a.get("balance", "0")),
                 transactions=txns,
                 holdings=holdings,
+                institution=org.get("name", "") or "",
+                org_domain=org.get("domain", "") or "",
             )
         )
     return accounts

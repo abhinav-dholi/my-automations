@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY,
     name TEXT,
     type TEXT,
+    subtype TEXT,
     institution TEXT,
     currency TEXT,
     source TEXT,
@@ -172,6 +173,15 @@ def connect():
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+
+
+def _migrate(conn) -> None:
+    """Additive, idempotent schema migrations for existing DBs (SQLite can't add
+    a column via CREATE TABLE IF NOT EXISTS)."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(accounts)")}
+    if "subtype" not in cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN subtype TEXT")
 
 
 # --- writes -------------------------------------------------------------
@@ -185,6 +195,13 @@ def upsert_account(conn, *, id, name, type, institution, currency, source) -> No
              currency=excluded.currency, last_synced=excluded.last_synced""",
         (id, name, type, institution, currency, source, _now(), _now()),
     )
+
+
+def set_account_subtype(conn, account_id: str, subtype: str) -> None:
+    """Tag an account with a refinement of its type (e.g. 'hysa' for a high-yield
+    savings account). Kept separate from upsert_account because it's derived after
+    transactions are ingested (interest history feeds the heuristic)."""
+    conn.execute("UPDATE accounts SET subtype=? WHERE id=?", (subtype or "", account_id))
 
 
 def record_balance(conn, *, account_id, balance, available, as_of) -> None:
@@ -464,7 +481,8 @@ def latest_balances(conn) -> list[dict]:
     (auto-heals stale-feed double-counts, e.g. a transfer credited but not yet
     debited at the source)."""
     rows = [dict(r) for r in conn.execute(
-        """SELECT a.id, a.name, a.type, b.balance, b.as_of FROM accounts a
+        """SELECT a.id, a.name, a.type, a.subtype, a.institution, b.balance, b.as_of
+           FROM accounts a
            JOIN balances b ON b.account_id=a.id
            WHERE b.as_of = (SELECT MAX(as_of) FROM balances WHERE account_id=a.id)
            ORDER BY a.name""").fetchall()]
@@ -483,6 +501,21 @@ def latest_balances(conn) -> list[dict]:
     for aid in obsolete:
         clear_balance_override(conn, aid)
     return rows
+
+
+def data_freshness(conn) -> dict:
+    """Most-recent ingest timestamp per data source, for staleness checks.
+    Values are ISO8601 strings (date-only for prices) or None if a source is
+    empty. Consumers (e.g. the on-demand bot) refresh only what's actually old
+    instead of syncing on every read."""
+    def _max(sql: str):
+        return conn.execute(sql).fetchone()[0]
+    return {
+        "bank": _max("SELECT MAX(as_of) FROM balances"),
+        "splitwise": _max("SELECT MAX(as_of) FROM splitwise_balances"),
+        "prices": _max("SELECT MAX(date) FROM market_prices"),
+        "news": _max("SELECT MAX(fetched_at) FROM market_news"),
+    }
 
 
 def latest_holdings(conn) -> list[sqlite3.Row]:

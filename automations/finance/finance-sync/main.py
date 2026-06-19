@@ -9,6 +9,7 @@ import time
 
 import yaml
 
+import account_classify
 import config
 import finance_rules
 import secrets_store
@@ -53,6 +54,23 @@ def infer_type(name: str, has_holdings: bool, balance: float, overrides: dict) -
     return "credit" if balance < 0 else "checking"
 
 
+def _implied_apy(conn, account_id: str, balance: float) -> float | None:
+    """Annualized yield from ingested interest credits, or None if no interest
+    history. Assumes monthly posting (the norm for savings): mean payment × 12 ÷
+    balance. Lets us tell a true HYSA (~3–5%) from a brick-and-mortar savings
+    account (~0%) without trusting the account's name."""
+    if not balance or balance <= 0:
+        return None
+    rows = conn.execute(
+        "SELECT amount FROM transactions WHERE account_id=? AND amount>0 "
+        "AND lower(description) LIKE '%interest%'", (account_id,),
+    ).fetchall()
+    pays = [r["amount"] for r in rows]
+    if not pays:
+        return None
+    return (sum(pays) / len(pays)) * 12.0 / balance
+
+
 def main() -> None:
     access_url = secrets_store.get("SIMPLEFIN_ACCESS_URL")
     started = time.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -74,12 +92,13 @@ def main() -> None:
             accounts = simplefin.get_accounts(access_url, w_start, w_end)
             if i == 0:
                 n_accounts = len(accounts)
+                snapshot = accounts        # current-state list for post-ingest classification
             for acct in accounts:
                 if i == 0:
                     store.upsert_account(
                         conn, id=acct.id, name=acct.name,
                         type=infer_type(acct.name, bool(acct.holdings), acct.balance, overrides),
-                        institution="", currency=acct.currency, source="simplefin",
+                        institution=acct.institution, currency=acct.currency, source="simplefin",
                     )
                     store.record_balance(
                         conn, account_id=acct.id, balance=acct.balance,
@@ -122,14 +141,28 @@ def main() -> None:
                             label_source="rule", confidence=1.0, model="transfer-match")
             n_transfers += 1
 
+        # Classify subtypes (brokerage/retirement/equity / HYSA-vs-regular) from
+        # name + institution + measured interest yield, so accounts self-label.
+        n_subtyped = 0
+        for acct in snapshot:
+            base = infer_type(acct.name, bool(acct.holdings), acct.balance, overrides)
+            apy = _implied_apy(conn, acct.id, acct.balance) if base == "savings" else None
+            sub = account_classify.subtype(
+                name=acct.name, base_type=base,
+                org_domain=acct.org_domain, implied_apy=apy,
+            )
+            store.set_account_subtype(conn, acct.id, sub)
+            if sub:
+                n_subtyped += 1
+
         store.record_sync(
             conn, source="simplefin", started=started, status="ok",
             n_accounts=n_accounts, n_transactions=n_new_txn,
-            note=f"history={HISTORY_DAYS}d transfers={n_transfers}",
+            note=f"history={HISTORY_DAYS}d transfers={n_transfers} subtyped={n_subtyped}",
         )
 
     print(f"[finance-sync] {n_accounts} accounts, {n_new_txn} new transactions, "
-          f"{n_transfers} transfer legs detected.")
+          f"{n_transfers} transfer legs detected, {n_subtyped} subtyped.")
 
 
 if __name__ == "__main__":
