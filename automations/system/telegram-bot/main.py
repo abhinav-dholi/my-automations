@@ -103,6 +103,8 @@ HELP = (
 FINANCE_HELP = (
     "Finance:\n"
     "/finance <question> — natural-language Q&A\n"
+    "/finance new — start a fresh chat (clears the running conversation context)\n"
+    "/finance chats — list & continue a past conversation (shared with the dashboard)\n"
     "/finance summary — current status (net worth, accounts, Splitwise)\n"
     "/finance sync — pull bank + Splitwise + AI-categorize\n"
     "/finance analyze — full AI analysis report\n"
@@ -174,6 +176,8 @@ def _main_menu() -> dict:
          {"text": "🏛 Council", "callback_data": "/finance council"}],
         [{"text": "🌐 Market brief", "callback_data": "/finance brief"},
          {"text": "📅 Weekly", "callback_data": "/finance weekly"}],
+        [{"text": "🆕 New chat", "callback_data": "/finance new"},
+         {"text": "📚 Chats", "callback_data": "/finance chats"}],
         [{"text": "📋 Status", "callback_data": "/status"},
          {"text": "❓ Help", "callback_data": "/help"}],
     ]}
@@ -199,7 +203,45 @@ def _resolve_callback(data: str) -> str:
     """Map a callback payload back to the command/question text to handle."""
     if data.startswith("fu:"):
         return "/finance " + _FOLLOWUPS.get(data[3:], "")
+    if data.startswith("conv:"):            # continue a picked past conversation
+        return "/finance use " + data[5:]
     return data
+
+
+# --- conversation tracking (so /finance new starts a fresh thread) ------
+_CONV_FILE = config.DATA_DIR / "telegram_conv.json"
+
+
+def _active_conv(chat_id: str) -> str:
+    """The current Ask-AI conversation id for this chat (shared with the
+    dashboard). Defaults to a stable id until the user starts a new chat."""
+    import json
+    try:
+        m = json.loads(_CONV_FILE.read_text())
+    except (FileNotFoundError, ValueError):
+        m = {}
+    return m.get(str(chat_id)) or f"tg-{chat_id}"
+
+
+def _set_conv(chat_id: str, conv_id: str) -> None:
+    """Point this chat at a specific conversation id (start fresh, or continue an
+    existing one picked from /finance chats)."""
+    import json
+    try:
+        m = json.loads(_CONV_FILE.read_text())
+    except (FileNotFoundError, ValueError):
+        m = {}
+    m[str(chat_id)] = conv_id
+    config.ensure_runtime_dirs()
+    _CONV_FILE.write_text(json.dumps(m))
+
+
+def _reset_conv(chat_id: str) -> str:
+    """Begin a fresh conversation; the old one stays saved in history."""
+    import time as _t
+    new = f"tg-{chat_id}-{int(_t.time())}"
+    _set_conv(chat_id, new)
+    return new
 
 
 def _status_text() -> str:
@@ -318,6 +360,45 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
             _send(token, chat_id, FINANCE_HELP)
             return
         first = rest.split()[0].lower()
+        if first in ("new", "reset", "newchat"):
+            _reset_conv(chat_id)
+            _send(token, chat_id, "🆕 Started a fresh chat. (Your previous conversation is "
+                  "saved — it stays in the dashboard's Ask AI history.)", reply_markup=_main_menu())
+            return
+        if first in ("chats", "history"):
+            sys.path.insert(0, str(config.LIB_PY))
+            import store
+            store.init_db()
+            with store.connect() as conn:
+                chats = store.list_chats(conn, 8)
+            if not chats:
+                _send(token, chat_id, "No saved chats yet — just ask a question to start one.")
+                return
+            active = _active_conv(chat_id)
+            rows = []
+            for c in chats:
+                title = (c.get("title") or "Chat").strip().replace("\n", " ")[:42]
+                mark = "▶ " if c["conv_id"] == active else ""
+                when = (c.get("started", "") or "")[:10]
+                rows.append([{"text": f"{mark}{title}  ·  {when}", "callback_data": f"conv:{c['conv_id']}"}])
+            _send(token, chat_id, "📚 Pick a conversation to continue (▶ = current):",
+                  reply_markup={"inline_keyboard": rows})
+            return
+        if first == "use":
+            conv_id = rest.split(maxsplit=1)[1].strip() if len(rest.split()) > 1 else ""
+            if not conv_id:
+                _send(token, chat_id, "Usage: /finance use <conversation-id> (or tap one in /finance chats)")
+                return
+            _set_conv(chat_id, conv_id)
+            sys.path.insert(0, str(config.LIB_PY))
+            import store
+            with store.connect() as conn:
+                hist = store.load_chat(conn, conv_id)
+            last = next((m["content"] for m in reversed(hist) if m["role"] == "assistant"), "")
+            tail = ("\n\n_Last reply:_ " + last[:300]) if last else ""
+            _send(token, chat_id, f"↩️ Continuing this chat ({len(hist)} messages). Ask away.{tail}",
+                  markdown=bool(tail))
+            return
         if first == "expert":
             parts = rest.split(maxsplit=2)
             if len(parts) < 2:
@@ -361,7 +442,7 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
             sys.path.insert(0, str(config.LIB_PY))
             import finance_chat
             import store
-            conv_id = f"tg-{chat_id}"       # shared history: shows up in the UI too
+            conv_id = _active_conv(chat_id)  # current thread (reset via /finance new); shared w/ UI
             store.init_db()
             with store.connect() as conn:
                 history = store.load_chat(conn, conv_id)
