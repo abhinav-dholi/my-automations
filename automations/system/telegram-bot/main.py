@@ -188,15 +188,20 @@ def _main_menu() -> dict:
 _FOLLOWUPS: dict[str, str] = {}
 
 
-def _followup_keyboard(followups: list[str]) -> dict | None:
-    if not followups:
-        return None
-    rows = []
-    for i, fu in enumerate(followups[:3]):
+def _followups_message(followups: list[str]):
+    """Telegram buttons don't wrap, so long follow-up questions get truncated.
+    List the full questions in the message text and keep the buttons compact
+    (just numbers); tapping resolves back to the full question via its token."""
+    fus = [f for f in (followups or []) if f][:3]
+    if not fus:
+        return None, None
+    lines, row = ["💬 Follow up — tap a number, or just type your own:"], []
+    for i, fu in enumerate(fus, 1):
         tok = f"f{len(_FOLLOWUPS)}_{i}"
         _FOLLOWUPS[tok] = fu
-        rows.append([{"text": f"💬 {fu[:50]}", "callback_data": f"fu:{tok}"}])
-    return {"inline_keyboard": rows}
+        lines.append(f"{i}. {fu}")
+        row.append({"text": f"💬 {i}", "callback_data": f"fu:{tok}"})
+    return "\n".join(lines), {"inline_keyboard": [row]}
 
 
 def _resolve_callback(data: str) -> str:
@@ -375,14 +380,16 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
                 _send(token, chat_id, "No saved chats yet — just ask a question to start one.")
                 return
             active = _active_conv(chat_id)
-            rows = []
-            for c in chats:
-                title = (c.get("title") or "Chat").strip().replace("\n", " ")[:42]
+            lines = ["📚 Pick a conversation to continue (tap a number; ▶ = current):"]
+            btns = []
+            for i, c in enumerate(chats, 1):
+                title = (c.get("title") or "Chat").strip().replace("\n", " ")[:60]
                 mark = "▶ " if c["conv_id"] == active else ""
                 when = (c.get("started", "") or "")[:10]
-                rows.append([{"text": f"{mark}{title}  ·  {when}", "callback_data": f"conv:{c['conv_id']}"}])
-            _send(token, chat_id, "📚 Pick a conversation to continue (▶ = current):",
-                  reply_markup={"inline_keyboard": rows})
+                lines.append(f"{i}. {mark}{title}  ·  {when}")
+                btns.append({"text": str(i), "callback_data": f"conv:{c['conv_id']}"})
+            kb = [btns[j:j + 4] for j in range(0, len(btns), 4)]   # numbers, 4 per row
+            _send(token, chat_id, "\n".join(lines), reply_markup={"inline_keyboard": kb})
             return
         if first == "use":
             conv_id = rest.split(maxsplit=1)[1].strip() if len(rest.split()) > 1 else ""
@@ -462,9 +469,9 @@ def handle(token: str, chat_id: str, cmd: str, text: str = "") -> None:
                         _send_photo(token, chat_id, png, caption=spec.get("title", ""))
                 except Exception as e:
                     print(f"[telegram-bot] chart render failed: {e}", flush=True)
-            kb = _followup_keyboard(res.get("followups") or [])
-            if kb:
-                _send(token, chat_id, "Follow up, or ask anything else 👇", reply_markup=kb)
+            ftext, fkb = _followups_message(res.get("followups"))
+            if fkb:
+                _send(token, chat_id, ftext, reply_markup=fkb)
         return
 
 
