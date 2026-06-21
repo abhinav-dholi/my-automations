@@ -156,7 +156,9 @@ On the Spending page each row can be tagged (survives re-syncs):
   concentration), Market (your holdings vs benchmarks, news), **Ask AI** (chat +
   auto-charts + history), **Data Health**, AI Analysis, Council.
 - **Telegram bot**: type a question (no command needed) → answer + chart image +
-  follow-up buttons; inline action menu; history shared with the dashboard.
+  follow-up buttons; inline action menu. Manage conversations with **`/finance new`**
+  (fresh chat) and **`/finance chats`** (browse & continue a past one) — history is
+  shared with the dashboard, so you can start on one and continue on the other.
 - **CLI**: `auto run/status/ui/logs/...`.
 
 ### Finance automations
